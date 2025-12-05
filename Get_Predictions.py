@@ -8,13 +8,15 @@ import climate_helpers as climate
 import basins_helpers as bh
 import test_systems as tst
 import argparse
-import pickle
 from typing import Union, List
+import pickle
 
 join = os.path.join
 
+skip_repeats = True
+
 parser = argparse.ArgumentParser()
-parser.add_argument('--test_system', required = True, choices = ['mag', 'duff', 'mlor', 'fduff'])
+parser.add_argument('--test_system', required = True, choices = ['mag', 'duff', 'fduff'])
 parser.add_argument('--partial_state', type = int, required = False, default = False)
 parser.add_argument('--reduce_fully', type = int, required = False, default = True)
 parser.add_argument('--test_length', type = int, required = True)
@@ -95,7 +97,7 @@ folder_letters = {
     }
 
 # Library Parameters
-basin_check_length = 4000
+basin_check_length = 4000    
 grid_train = False
 rotation = 0
 use_energies = True
@@ -110,6 +112,7 @@ else:
 
 # Computational Choices
 reduce_states = True
+num_cores = 1
 save_predictions = True
 safe_save_predictions = False
 
@@ -132,7 +135,9 @@ if test_system == "duff":
             transient_length:       int = 0,
             return_length:          int = 4000,
             visible_dimensions:     Union[int, List[int], np.ndarray] = np.arange(2),
-            direction:              str = "forward"
+            direction:              str = "forward",
+            process_noise:          float = 0.,
+            return_every:           int = 1
             ):
         
         def generator(x0: float, x1: float, seed: int):
@@ -148,7 +153,9 @@ if test_system == "duff":
                 return_length = return_length,
                 seed = seed,
                 return_dims = visible_dimensions,
-                direction = direction
+                direction = direction,
+                return_every = return_every,
+                process_noise = process_noise
                 )
             
         generator.return_length = return_length
@@ -160,10 +167,13 @@ if test_system == "duff":
         a = a,
         b = b,
         c = c,
-        transient_length = 0,
-        visible_dimensions = visible_dimensions
+        visible_dimensions = visible_dimensions,
+        process_noise = process_noise,
+        transient_length = integrator_transient,
+        return_every = rc_time_step
         )
     val_generator_args = train_generator_args.copy()
+    val_generator_args["process_noise"] = val_process_noise
 
     if len(visible_dimensions) == 2:
         energy_func = tst.unforced_duffing_energy
@@ -188,7 +198,7 @@ if test_system == "duff":
                         finals = finals[0]
                         
             return finals
-        
+    
     get_basin = bh.get_attractor(
         fixed_points = fixed_pts,
         use_energies = bool(len(visible_dimensions) == 2),
@@ -209,7 +219,6 @@ if test_system == "duff":
 
     # Set Training
     transient_length = 5
-    batch_length = 1000
     batch_size = 10
     accessible_drives = -1
     
@@ -233,26 +242,25 @@ if test_system == "duff":
        
 elif test_system == "fduff":
     a, b, c, f0, fv, w = -0.5, -1., 0.1, 1., 0., .1 # Asymmetric
-    #a, b, c, f0, fv, w = -0.5, -1., 0.1, 0., 0., 2. #.5 #Periodic
-    #a, b, c, f0, fv, w = -0.5, -1., 0.1, 0., 0., .1 # Symmetric
+    # a, b, c, f0, fv, w = -0.5, -1., 0.1, 0., 0., 2. #.5 # Periodic
+    # a, b, c, f0, fv, w = -0.5, -1., 0.1, 0., 0., .1 # Unforced
     lib_length = 500
     val_length = 2000
     
-    if partial_state:
-        visible_dimensions = [0]
-    else:
-        visible_dimensions = [0, 1]
-    
-    # For a, b, c, f0, fv, w = -0.5, -1., 0.1, 1., 0., .1
     if f0 == 0 and fv == 0:
-        fixed_pts = np.array([[-np.sqrt(-b/c), 0], [np.sqrt(-b/c), 0]]) 
+        fixed_pts = np.array([[-np.sqrt(-b/c), 0], [np.sqrt(-b/c), 0]])
     if f0 == 1:
         fixed_pts = np.array([
             [-2.42362, 0],
             #[-1.15347, 0], #Unstable
             [3.57709, 0]
             ])
-            
+    
+    if partial_state:
+        visible_dimensions = [0]
+    else:
+        visible_dimensions = [0, 1]
+    
     def get_generator(
             a,
             b,
@@ -264,8 +272,9 @@ elif test_system == "fduff":
             return_length:          int = 4000,
             visible_dimensions:     Union[int, List[int], np.ndarray] = np.arange(2),
             direction:              str = "forward",
-            return_time:            bool = False,
+            return_time:            bool = True,
             process_noise:          float = 0.,
+            return_every:           int = 1
             ):
         
         def generator(x0: float, x1: float, seed: int):
@@ -285,8 +294,8 @@ elif test_system == "fduff":
                 seed = seed,
                 return_dims = visible_dimensions,
                 direction = direction,
-                return_time = return_time,
-                process_noise = process_noise
+                process_noise = process_noise,
+                return_every = return_every
                 )
             
         generator.return_length = return_length
@@ -301,24 +310,19 @@ elif test_system == "fduff":
         f0 = f0,
         fv = fv,
         w = w,
-        transient_length = 0,
+        transient_length = integrator_transient,
         visible_dimensions = visible_dimensions,
-        process_noise = process_noise
+        process_noise = process_noise,
+        return_every = rc_time_step
         )
     val_generator_args = train_generator_args.copy()
     val_generator_args["process_noise"] = val_process_noise
     
     if len(visible_dimensions) == 2:
-        """
         energy_func = tst.unforced_duffing_energy
         kinetic_func = tst._unforced_duffing_kinetic
         potential_func = tst._unforced_duffing_potential
         energy_args = {"a" : a, "b" : b, "c" : c}
-        """
-        energy_func = None
-        kinetic_func = None
-        potential_func = None
-        energy_args = None
         
         def end_processing(x):
             
@@ -352,14 +356,14 @@ elif test_system == "fduff":
 
     get_basin = bh.get_attractor(
         fixed_points = fixed_pts,
-        use_energies = False,
+        use_energies = bool(len(visible_dimensions) == 2),
         energy_func = energy_func,
         energy_args = energy_args,
         energy_barrier_loc = np.zeros(2),
         distance_threshold = distance_threshold,
         visible_dimensions = visible_dimensions
         )
-        
+      
     # Define Predictor
     esn_seed = 99
     input_strength = 1
@@ -370,30 +374,10 @@ elif test_system == "fduff":
 
     # Set Training
     transient_length = 5
-    batch_length = 1000
     batch_size = 10
     accessible_drives = -1
     
-    if len(visible_dimensions) < 2:
-        performance_metric = None
-    else:
-        analytic_step = lambda x : tst.get_unforced_duffing(
-            a = a,
-            b = b,
-            c = c,
-            x0 = x.flatten(),
-            transient_length = 1,
-            return_length = 1,
-            return_dims = visible_dimensions
-            )
-        
-        performance_metric = lambda x: climate.get_map_error(
-            predictions = x,
-            analytic_map = analytic_step,
-            discard = 0,
-            normalize = False
-            )[0]
-        performance_metric.name = "Autonomous One-step Error"
+    performance_metric = None
 
 elif test_system == "mag":
     height = .2
@@ -422,19 +406,28 @@ elif test_system == "mag":
             height:                 float = .2,
             frequency:              float = .5,
             damping:                float = .2,
-            direction:              str = "forward"
+            direction:              str = "forward",
+            transient_length:       int = 0,
+            process_noise:          float = 0.,
+            return_every:           int = 1
             ):
         
         def generator(x0: float, x1: float, seed: int):
                 
-            return tst.get_magnetic_pendulum(initial_state = [x0, x1, 0., 0.],
-                                             height = height,
-                                             frequency = frequency,
-                                             damping = damping,
-                                             return_length = return_length,
-                                             return_dims = visible_dimensions,
-                                             seed = seed, mag_locs = mag_locs,
-                                             direction = direction)
+            return tst.get_magnetic_pendulum(
+                initial_state = [x0, x1, 0., 0.],
+                height = height,
+                frequency = frequency,
+                damping = damping,
+                return_length = return_length,
+                return_dims = visible_dimensions,
+                seed = seed,
+                mag_locs = mag_locs,
+                direction = direction,
+                transient_length = transient_length,
+                #process_noise = process_noise,
+                return_every = return_every
+                )
         
         generator.return_length = return_length
         generator.parameter_labels = ['x' + str(i) for i in range(2)]
@@ -447,8 +440,12 @@ elif test_system == "mag":
         damping = damping,
         visible_dimensions = visible_dimensions,
         mag_locs = mag_locs,
+        transient_length = integrator_transient,
+        process_noise = process_noise,
+        return_every = rc_time_step
         )
     val_generator_args = train_generator_args.copy()
+    val_generator_args["process_noise"] = val_process_noise
     
     if len(visible_dimensions) == 4:
         energy_func = tst.mp_energy
@@ -499,7 +496,6 @@ elif test_system == "mag":
     # Set Training
     transient_length = 25
     batch_size = 10
-    batch_length = 1000
     accessible_drives = -1
     
     analytic_step = lambda x : tst.get_magnetic_pendulum(
@@ -519,47 +515,7 @@ elif test_system == "mag":
     performance_metric.name = "Autonomous One-step Error"
     performance_metric = None
 
-# Construct the training library
-train_library = bh.get_lib(
-    get_generator = get_generator,
-    get_basin = get_basin,
-    generator_args = train_generator_args,
-    lib_size = lib_size,
-    lib_length = lib_length,
-    basin_check_length = basin_check_length,
-    seed = train_seed,
-    train_basin = train_basin,
-    grid = grid_train,
-    IC_rng = IC_rng,
-    standardize = standardize,
-    end_processing = end_processing
-    )
-
-# Construct the test library
-val_library = bh.get_lib(
-    get_generator = get_generator,
-    get_basin = get_basin,
-    generator_args = val_generator_args,
-    lib_size = val_grid_width**2,
-    lib_length = val_length,
-    basin_check_length = basin_check_length,
-    seed = 2*train_seed + 1,
-    train_basin = None,
-    grid = True,
-    IC_rng = val_IC_rng,
-    standardize = standardize,
-    standardizer = train_library.standardizer,
-    end_processing = end_processing
-    )
-
-save_loc = os.path.join(
-    os.path.join(os.getcwd(), "Big_Sim_Data"),
-    f"tl{test_length}_v{val_grid_width}_s{esn_size}"
-    )
-
-if not os.path.isdir(save_loc):
-    os.makedirs(save_loc)
-    
+save_loc = os.path.join(os.getcwd(), "Basin_Data")
 folder = test_system + "_"
 if partial_state:
     folder += "v"
@@ -568,93 +524,127 @@ if partial_state:
 if is_extra_name:
     folder += extra_name
 save_loc = os.path.join(save_loc, folder)
-
-if not os.path.isdir(save_loc):
-    os.makedirs(save_loc)
-
-with open(join(save_loc, 'train_ics.pickle'), 'wb') as tmp_file:
-            pickle.dump(train_library.parameters, tmp_file)
-with open(join(save_loc, 'val_ics.pickle'), 'wb') as tmp_file:
-            pickle.dump(val_library.parameters, tmp_file)
-
 save_loc = os.path.join(save_loc, folder_one + folder_letters[folder_one])
 if folder_two in folder_letters.keys():
     save_loc = os.path.join(save_loc, folder_two + folder_letters[folder_two])
 
-print("Training Starting, Folder: ", folder)
-
-break_check = True
-try_seed = 0
-if mean_reg:
-    num_fit = lib_length * lib_size - lib_size * (transient_length + 1)
+if not os.path.isdir(save_loc):
+    os.makedirs(save_loc)
+if str(train_seed) + 'closed.pickle' in os.listdir(save_loc) and skip_repeats:
+    print("Data Already Exists in Folder: ", save_loc)
 else:
-    num_fit = 1
-while break_check:
-    try:
-        # Construct the predictor
-        predictor = bh.batch_predictor(
-            reservoir = rc.ESN(
-                input_dimension = len(visible_dimensions),
-                seed = esn_seed + (try_seed * np.random.default_rng(esn_seed * train_seed).integers(1000, 2000)),
-                size = esn_size,
-                connections = connections,
-                spectral_radius = spectral_radius,
-                input_strength = input_strength,
-                bias_strength = bias_strength,
-                leaking_rate = leaking_rate
-            ))
-        # Train the predictor
-        predictor.train(
-            library = train_library,
-            train_args = dict(
-                transient_length = transient_length,
-                regression = regressions.batched_ridge(regularization = num_fit * regularization),
-                feature_function = feature_function,
-                batch_size = batch_size,
-                accessible_drives = accessible_drives
-                ),
-            return_result = False,
-            noise_amp = noise_amplitude
+    print("Training Starting, Folder: ", folder)
+    
+    # Construct the training library
+    train_library = bh.get_lib(
+        get_generator = get_generator,
+        get_basin = get_basin,
+        generator_args = train_generator_args,
+        lib_size = lib_size,
+        lib_length = lib_length,
+        basin_check_length = basin_check_length,
+        seed = train_seed,
+        train_basin = train_basin,
+        grid = grid_train,
+        IC_rng = IC_rng,
+        standardize = standardize,
+        end_processing = end_processing
+        )
+
+    # Construct the test library
+    val_library = bh.get_lib(
+        get_generator = get_generator,
+        get_basin = get_basin,
+        generator_args = val_generator_args,
+        lib_size = val_grid_width**2,
+        lib_length = val_length,
+        basin_check_length = basin_check_length,
+        seed = 1000,
+        train_basin = None,
+        grid = grid_val,
+        IC_rng = val_IC_rng,
+        standardize = standardize,
+        standardizer = train_library.standardizer,
+        end_processing = end_processing
+        )
+    
+    with open(join(save_loc, f'{train_seed}_train_ics.pickle'), 'wb') as tmp_file:
+        pickle.dump(train_library.parameters, tmp_file)
+    with open(join(save_loc, f'{train_seed}_val_ics.pickle'), 'wb') as tmp_file:
+        pickle.dump(val_library.parameters, tmp_file)
+    
+    if mean_reg:
+        num_fit = lib_length * lib_size - lib_size * (transient_length + 1)
+    else:
+        num_fit = 1
+    break_check = True
+    try_seed = 0
+    while break_check:
+        try:
+            # Construct the predictor
+            predictor = bh.batch_predictor(
+                reservoir = rc.ESN(
+                    input_dimension = len(visible_dimensions),
+                    seed = esn_seed + (try_seed * np.random.default_rng(esn_seed * train_seed).integers(1000, 2000)),
+                    size = esn_size,
+                    connections = connections,
+                    spectral_radius = spectral_radius,
+                    input_strength = input_strength,
+                    bias_strength = bias_strength,
+                    leaking_rate = leaking_rate
+                ))
+            # Train the predictor
+            predictor.train(
+                library = train_library,
+                train_args = dict(
+                    transient_length = transient_length,
+                    regression = regressions.batched_ridge(regularization = num_fit * regularization),
+                    feature_function = feature_function,
+                    batch_size = batch_size,
+                    accessible_drives = accessible_drives
+                    ),
+                return_result = False,
+                noise_amp = noise_amplitude
+                )
+            break_check = False
+        except np.linalg.LinAlgError:
+            try_seed += 1
+    
+    print("Final try_seed: ", try_seed)
+    
+    if open_loop:
+        print("Predicting Open Loop")
+        mapper_func = rch.drive_mapper
+        predictor.predict(
+            library = val_library,
+            test_length = test_length,
+            return_predictions = False,
+            open_loop = True,
+            save_predictions = save_predictions,
+            save_loc = save_loc,
+            safe_save = safe_save_predictions,
+            file_name = str(train_seed) + 'open',
+            reduce_fully = reduce_fully,
+            reduce_states = reduce_states,
+            metric_func = performance_metric,
+            mapper_func = mapper_func,
+            end_processing = end_processing
             )
-        break_check = False
-    except np.linalg.LinAlgError:
-        try_seed += 1
-
-print("Final try_seed: ", try_seed)
-
-if open_loop:
-    print("Predicting Open Loop")
-    mapper_func = rch.drive_mapper
-    predictor.predict(
-        library = val_library,
-        test_length = test_length,
-        return_predictions = False,
-        open_loop = True,
-        save_predictions = save_predictions,
-        save_loc = save_loc,
-        safe_save = safe_save_predictions,
-        file_name = str(train_seed) + 'open',
-        reduce_fully = reduce_fully,
-        reduce_states = reduce_states,
-        metric_func = performance_metric,
-        mapper_func = mapper_func,
-        end_processing = end_processing
-        )
-    print("Done Open Loop")
-
-if closed_loop:
-    print("Predicting Closed Loop")
-    predictor.predict(
-        library = val_library,
-        test_length = test_length,
-        return_predictions = False,
-        save_predictions = save_predictions,
-        save_loc = save_loc,
-        safe_save = safe_save_predictions,
-        file_name = str(train_seed) + 'closed',
-        reduce_fully = reduce_fully,
-        reduce_states = reduce_states,
-        metric_func = performance_metric,
-        end_processing = end_processing
-        )
-    print("Done Closed Loop")
+        print("Done Open Loop")
+    
+    if closed_loop:
+        print("Predicting Closed Loop")
+        predictor.predict(
+            library = val_library,
+            test_length = test_length,
+            return_predictions = False,
+            save_predictions = save_predictions,
+            save_loc = save_loc,
+            safe_save = safe_save_predictions,
+            file_name = str(train_seed) + 'closed',
+            reduce_fully = reduce_fully,
+            reduce_states = reduce_states,
+            metric_func = performance_metric,
+            end_processing = end_processing
+            )
+        print("Done Closed Loop")

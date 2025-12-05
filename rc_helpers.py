@@ -1,7 +1,6 @@
 #%% Import Statements
 
 import rescompy as rc
-import rescompy.regressions as regressions
 import rescompy.features as features
 import numpy as np
 from typing import Union, Callable, List
@@ -10,7 +9,6 @@ from dataclasses import dataclass
 import os
 import pickle
 import shutil
-import inspect
 import numba
 import matplotlib.pyplot as plt
 import itertools
@@ -18,7 +16,6 @@ import functools
 import matplotlib as mpl
 
 windower = np.lib.stride_tricks.sliding_window_view
-
 
 #%% Feature Functions
 
@@ -244,11 +241,12 @@ def plot_spatiotemporal(
         ax.set_ylabel(y_label)
         fig.colorbar(pcm, ax = ax, label = colorbar_label)
         plt.show()
-
+        
 def plot_predict_result(
         prediction:         rc.PredictResult,
         plot_dims:          Union[int, List[int]] = None,
         max_horizon:        int = None,
+        make_legend:        bool = True,
         frame_legend:       bool = False,
         legend_loc:         tuple = (.5, 1.1),
         legend_ax:          int = 0,
@@ -265,7 +263,10 @@ def plot_predict_result(
         xlims:              tuple = None,
         ylims:              tuple = None,
         figsize:            tuple = None,
-        num_ticks:          int = None,
+        xticks:             np.ndarray = None,
+        yticks:             np.ndarray = None,
+        num_xticks:         int = None,
+        num_yticks:         int = None,
         line_alpha:         float = 1,
         fig_alpha:          float = 1,
         vert_linewidth:     float = None,
@@ -280,8 +281,8 @@ def plot_predict_result(
     if max_horizon is None:
         max_horizon = prediction.reservoir_outputs.shape[0]
         
-    if xlabel is None:
-        xlabel = "Time (Time Steps, $\\Delta t$)"
+    #if xlabel is None:
+    #    xlabel = "Time (Time Steps, $\\Delta t$)"
     
     with mpl.rc_context({"font.size" : font_size}):
         if figsize is None:
@@ -362,23 +363,164 @@ def plot_predict_result(
             if ylims is not None:
                 ax.set_ylim(*ylims)
                 
-            if num_ticks is not None:
-                ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_ticks))
-                ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_ticks))
+            if xticks is not None:
+                ax.set_xticks(xticks)
+            elif num_xticks is not None:
+                ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_xticks))
                 #ax.set_xticks(np.linspace(min(initial_pts[:, 0]), max(initial_pts[:, 0]), num_ticks))
                 #ax.set_yticks(np.linspace(min(initial_pts[:, 1]), max(initial_pts[:, 1]), num_ticks))
+            if yticks is not None:
+                ax.set_yticks(yticks)
+            elif num_yticks is not None:
+                ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_yticks))
                 
-        if isinstance(legend_loc, tuple):
+        if isinstance(legend_loc, tuple) and make_legend:
             axs[legend_ax].legend(loc = "center", bbox_to_anchor = legend_loc,
                                   ncols = n_legend_cols, frameon = frame_legend)
-        else:
+        elif make_legend:
             axs[legend_ax].legend(loc = legend_loc, ncols = n_legend_cols, frameon = frame_legend)
         axs[-1].set_xlabel(xlabel) #"Time (Time Steps, $\\Delta t$)") #($\\tau_{Lyap}$)")
         #fig.suptitle("Valid Time: $T_{valid}=$" + f"{prediction.valid_length()}" + "$\\tau_{Lyap}$")
         
         if fig is not None:
             fig.patch.set_alpha(fig_alpha)
+
+'''
+def plot_predict_result(
+        prediction:         rc.PredictResult,
+        plot_dims:          Union[int, List[int]] = None,
+        max_horizon:        int = None,
+        make_legend:        bool = True,
+        frame_legend:       bool = False,
+        legend_loc:         tuple = (.5, 1.1),
+        legend_ax:          int = 0,
+        n_legend_cols:      int = 4,
+        font_size:          float = 15.,
+        incl_tvalid:        bool = True,
+        fig:                mpl.figure.Figure = None,
+        axes:               np.ndarray = None,
+        xlabel:             str = None,
+        ylabel:             str = None,
+        prediction_color:   str = "r",
+        truth_color:        str = "k",
+        linewidth:          float = None,
+        xlims:              tuple = None,
+        ylims:              tuple = None,
+        figsize:            tuple = None,
+        num_ticks:          int = None,
+        line_alpha:         float = 1,
+        fig_alpha:          float = 1,
+        vert_linewidth:     float = None,
+        t0:                 float = 0.,
+        ylim_from_truth:    bool = False,
+        start_label:        str = "Loop Closed",
+        ):
+    
+    if plot_dims is None:
+        plot_dims = list(np.arange(prediction.reservoir_outputs.shape[1]))
+    elif isinstance(plot_dims, int):
+        plot_dims = [plot_dims]
         
+    if max_horizon is None:
+        max_horizon = prediction.reservoir_outputs.shape[0]
+    
+    with mpl.rc_context({"font.size" : font_size}):
+        if figsize is None:
+            figsize = (12, 3 * len(plot_dims))
+        if axes is None:
+            fig, axs = plt.subplots(len(plot_dims), 1,
+                                    figsize = figsize, 
+                                    sharex = True, constrained_layout = True)
+            if isinstance(axs, mpl.axes._axes.Axes):
+                axs = [axs]
+        else:
+            axs = axes
+            if isinstance(axs, mpl.axes._axes.Axes):
+                axs = [axs]
+            for ax in axs[1:]:
+                ax.sharex(axs[0])
+            for ax in axs[:-1]:
+                ax.tick_params(labelbottom = False)
+        for i, ax in zip(plot_dims, axs):
+            if prediction.resync_inputs is not None:
+                ax.plot(
+                    t0 + np.arange(- prediction.resync_inputs.shape[0] + 1, 1),
+                    prediction.resync_inputs[:, i],
+                    color = truth_color,
+                    linewidth = linewidth,
+                    alpha = line_alpha
+                    )
+            if prediction.resync_outputs is not None:
+                # Fix and add flag for whether to include/ignore
+                lookback_length = prediction.resync_inputs.shape[0] - prediction.resync_outputs.shape[0]
+                ax.plot(
+                    t0 + np.arange(- prediction.resync_outputs.shape[0] + 1, 1), #Needs to shift by a time step
+                    prediction.resync_inputs[lookback_length:, i], #Needs to change to resync_outputs
+                    color = truth_color,
+                    linestyle = "-",
+                    linewidth = linewidth,
+                    alpha = line_alpha
+                    )
+            if prediction.target_outputs is not None:
+                ax.plot(
+                    t0 + np.arange(1, prediction.target_outputs.shape[0] + 1),
+                    prediction.target_outputs[:, i],
+                    color = truth_color,
+                    label = "Truth",
+                    linewidth = linewidth,
+                    alpha = line_alpha
+                    )
+            ax.plot(
+                t0 + np.arange(1, prediction.reservoir_outputs.shape[0] + 1),
+                prediction.reservoir_outputs[:, i],
+                color = prediction_color,
+                label = "Prediction",
+                linestyle = "-",
+                linewidth = linewidth,
+                alpha = line_alpha
+                )
+            ax.axvline(x = t0, linestyle = "--", color = "k",
+                       label = start_label, linewidth = vert_linewidth)
+            if prediction.target_outputs is not None and incl_tvalid and \
+                np.all(np.var(prediction.target_outputs, axis = 0)):
+                    ax.axvline(x = t0 + prediction.valid_length(), linestyle = "--",
+                               color = prediction_color,
+                               linewidth = vert_linewidth,
+                               label = "Valid Prediction Time")
+            if ylabel is None:
+                ax.set_ylabel(rf"$x_{{{i + 1}}}$")
+            else:
+                ax.set_ylabel(ylabel)
+            if prediction.reservoir_outputs.shape[0] > max_horizon:
+                prev_left_lim = ax.get_xlim()[0]
+                test_length = prediction.resync_inputs[lookback_length:, i].shape[0]
+                new_left_lim = - test_length - abs(abs(prev_left_lim) - abs(test_length)) * max_horizon / prediction.reservoir_outputs.shape[0]
+                ax.set_xlim(left = new_left_lim, right = max_horizon)
+                
+            if xlims is not None:
+                ax.set_xlim(*xlims)
+            if ylim_from_truth and prediction.target_outputs is not None:
+                ax.set_ylim(
+                    ymin = np.min(prediction.target_outputs[:, i]) - .1 * np.ptp(prediction.target_outputs[:, i]),
+                    ymax = np.max(prediction.target_outputs[:, i]) + .1 * np.ptp(prediction.target_outputs[:, i])
+                    )
+            elif ylims is not None:
+                ax.set_ylim(*ylims)
+                
+            if num_ticks is not None:
+                ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_ticks))
+                ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_ticks))
+                
+        if isinstance(legend_loc, tuple) and make_legend:
+            axs[legend_ax].legend(loc = "center", bbox_to_anchor = legend_loc,
+                                  ncols = n_legend_cols, frameon = frame_legend)
+        elif make_legend:
+            axs[legend_ax].legend(loc = legend_loc, ncols = n_legend_cols, frameon = frame_legend)
+        axs[-1].set_xlabel(xlabel)
+        
+        if fig is not None:
+            fig.patch.set_alpha(fig_alpha)
+'''
 def plot_predict_result_errors(
         predictions:        Union[List[rc.PredictResult], rc.PredictResult],
         predicted_basins:   List = None,
@@ -398,7 +540,7 @@ def plot_predict_result_errors(
         fig:                mpl.figure.Figure = None,
         axes:               np.ndarray = None,
         bar_axes:           np.ndarray = None,
-        xlabel:             str = "Time (Time Steps, $\\Delta t$)", #None,
+        xlabel:             str = "Time (Time Steps, $\\Delta t$)",
         ylabel:             str = None,
         color:              Union[str, tuple] = "tab:blue",
         linewidth:          float = None,
@@ -423,8 +565,6 @@ def plot_predict_result_errors(
     if not isinstance(predictions, list):
         predictions = [predictions]
         
-    #if decimation is not None:
-    #    predictions = predictions[::decimation]
     if decimation is None:
         decimation = 1
     
@@ -447,26 +587,16 @@ def plot_predict_result_errors(
         
     if bar_axes is not None:
         end_errs = np.array([e[-25:].mean() for e in errors])
-        histogram_data = np.histogram(end_errs,
-                                      bins = 1000,
-                                      density = True)
-        #print(np.array(histogram_data).shape)
         n, bins, patches = bar_axes.hist(
             end_errs,
-            bins = bar_bins, #250, #"auto", #100,
+            bins = bar_bins,
             orientation = "horizontal",
-            #density = True,
             weights = np.ones_like(end_errs) / len(end_errs),
-            #density = False, #fill = False,
-            #stacked = True,
             alpha = bar_alpha,
             color = color
             )
         print("Histogram Sum: ", np.sum(n))
         bar_axes.set_xlabel("Freq.")
-    
-    #if xlabel is None:
-    #    xlabel = "Time (Time Steps, $\\Delta t$)"
     
     with mpl.rc_context({"font.size" : font_size}):
         if figsize is None:
@@ -486,8 +616,7 @@ def plot_predict_result_errors(
             for ax in axs[:-1]:
                 
                 ax.tick_params(labelbottom = False)
-        
-        
+                
         for i, ax in enumerate(axs):
             
             if average is None:
@@ -498,18 +627,11 @@ def plot_predict_result_errors(
                     elif error_threshold is None:
                         ind_color = color
                     elif errors[ind][-25:].max() > error_threshold:
-                        ind_color = incorrect_color #"tab:purple" #"tab:gray"
+                        ind_color = incorrect_color
                     else:
                         ind_color = color
                     if num_each is not None:
-                        """
-                        if already_plotted[predicted_basins[ind]] < num_each:
-                            ax.plot(t0 + np.arange(errors.shape[1]), errors[ind],
-                                    c = ind_color, alpha = line_alpha, linewidth = linewidth)
-                            already_plotted[predicted_basins[ind]] += 1
-                        """
-                        #print(ind)
-                        #print(predicted_basins[ind])
+                        
                         if not np.isnan(predicted_basins[ind]):
                             if already_plotted[predicted_basins[ind]] == num_each:
                                 ax.plot(t0 + np.arange(errors.shape[1]), errors[ind],
@@ -522,6 +644,7 @@ def plot_predict_result_errors(
                         ax.plot(t0 + np.arange(errors.shape[1]), errors[ind],
                                 c = ind_color, alpha = line_alpha, linewidth = linewidth)
                 label = ""
+                
             else:
                 if average == "median":
                     avgd = np.median(errors, axis = 0)
@@ -601,7 +724,8 @@ def plot_errors_histograms(
         bar_error_scale:    str = "linear",
         bar_scale:          str = "linear",
         t0:                 int = -25,
-        t1:                 int = None
+        t1:                 int = None,
+        make_legend:        bool = False
         ):
     
     if not isinstance(predictions, list):
@@ -619,13 +743,11 @@ def plot_errors_histograms(
             errors = np.array([p.rmse for p in predictions])
 
     if ax is not None:
-        end_errs = np.array([e[t0: t1].max() for e in errors]) #mean() for e in errors])
-        #print(np.array(histogram_data).shape)
+        end_errs = np.array([e[t0: t1].max() for e in errors])
         n, bins, patches = ax.hist(
             end_errs,
-            bins = bar_bins, #250, #"auto", #100,
+            bins = bar_bins,
             orientation = orientation,
-            #density = True,
             weights = np.ones_like(end_errs) / len(end_errs),
             alpha = bar_alpha,
             color = color
@@ -637,7 +759,8 @@ def plot_errors_histograms(
         ax.set_xscale(bar_error_scale)
         ax.set_yscale(bar_scale)
         if error_threshold is not None:
-            ax.axvline(error_threshold, c = "k", linestyle = "--")
+            ax.axvline(error_threshold, c = "k", linestyle = ":",
+                       label = "Threshold, $\\varepsilon_c$")
         
         if xlims is not None:
             ax.set_ylim(*xlims)
@@ -645,7 +768,6 @@ def plot_errors_histograms(
             ax.set_xlim(*ylims)
         if num_ticks is not None:
             ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_ticks))
-            #ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_ticks))
         if xticks is not None:
             ax.set_yticks(xticks)
         if yticks is not None:
@@ -657,6 +779,110 @@ def plot_errors_histograms(
         ax.set_yscale(bar_error_scale)
         ax.set_xscale(bar_scale)
         if error_threshold is not None:
+            ax.axhline(error_threshold, c = "k", linestyle = ":",
+                       label = "Threshold, $\\varepsilon_c$")
+            
+        if xlims is not None:
+            ax.set_xlim(*xlims)
+        if ylims is not None:
+            ax.set_ylim(*ylims)
+        if num_ticks is not None:
+            ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_ticks))
+        if xticks is not None:
+            ax.set_xticks(xticks)
+        if yticks is not None:
+            ax.set_yticks(yticks)
+            
+    if make_legend:
+        ax.legend(loc = "best", frameon = False)
+    
+    fig.patch.set_alpha(fig_alpha)
+    
+def plot_attractor_error_histograms(
+        predictions,
+        true_basins:            List = None,
+        predicted_basins:       List = None,
+        inter_attractor_error:  float = None,
+        error_type:             str = "kl",
+        error_threshold:        float = None,
+        frame_legend:           bool = False,
+        font_size:              float = 15.,
+        fig:                    mpl.figure.Figure = None,
+        ax:                     np.ndarray = None,
+        xlabel:                 str = None,
+        ylabel:                 str = None,
+        color:                  Union[str, tuple] = "tab:blue",
+        linewidth:              float = None,
+        xlims:                  tuple = None,
+        ylims:                  tuple = None,
+        figsize:                tuple = None,
+        num_ticks:              int = None,
+        fig_alpha:              float = 1,
+        vert_linewidth:         float = None,
+        bar_alpha:              float = 1,
+        bar_bins:               Union[list, np.ndarray, int] = None,
+        xticks:                 Union[list, np.ndarray] = None,
+        yticks:                 Union[list, np.ndarray] = None,
+        orientation:            str = 'vertical',
+        bar_error_scale:        str = "linear",
+        bar_scale:              str = "linear",
+        make_legend:            bool = False
+        ):
+    
+    if not isinstance(predictions, list):
+        predictions = [predictions]
+    
+    if error_type == "kl":
+        errors = np.array([p.predicted_finals[tb]
+                           for p, tb in zip(predictions, true_basins)])
+
+    if ax is not None:
+        end_errs = errors.copy()
+        n, bins, patches = ax.hist(
+            end_errs,
+            bins = bar_bins,
+            orientation = orientation,
+            weights = np.ones_like(end_errs) / len(end_errs),
+            alpha = bar_alpha,
+            color = color
+            )
+    if orientation == "vertical":
+        ax.set_ylabel("Frequency")
+        ax.set_xlabel("Kullback-Liebler Divergence, $\\Delta_{KL}$")
+        ax.set_xscale(bar_error_scale)
+        ax.set_yscale(bar_scale)
+        if error_threshold is not None:
+            if make_legend:
+                label = "Threshold, $\\varepsilon_c$"
+            else:
+                label = None
+            ax.axvline(error_threshold, c = "k", linestyle = "dotted", label = label,
+                       linewidth = vert_linewidth)
+        if inter_attractor_error is not None:
+            if make_legend:
+                label = "$\\Delta_{KL}$ between\nTrue Attractors"
+            else:
+                label = None
+            ax.axvline(inter_attractor_error, c = "k", linestyle = "--", label = label,
+                       linewidth = vert_linewidth)
+        
+        if xlims is not None:
+            ax.set_ylim(*xlims)
+        if ylims is not None:
+            ax.set_xlim(*ylims)
+        if num_ticks is not None:
+            ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_ticks))
+        if xticks is not None:
+            ax.set_yticks(xticks)
+        if yticks is not None:
+            ax.set_xticks(yticks)
+            
+    elif orientation == "horizontal":
+        ax.set_xlabel("Frequency")
+        ax.set_ylabel("KL Divergence between True and Predicted Attractors, $\\Delta_{KL}$")
+        ax.set_yscale(bar_error_scale)
+        ax.set_xscale(bar_scale)
+        if error_threshold is not None:
             ax.axhline(error_threshold, c = "k", linestyle = "--")
             
         if xlims is not None:
@@ -665,66 +891,16 @@ def plot_errors_histograms(
             ax.set_ylim(*ylims)
         if num_ticks is not None:
             ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_ticks))
-            #ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_ticks))
         if xticks is not None:
             ax.set_xticks(xticks)
         if yticks is not None:
             ax.set_yticks(yticks)
     
+    if make_legend:
+        ax.legend(loc = "best", frameon = False)
     fig.patch.set_alpha(fig_alpha)
 
-
 #%% Training Data Construction
-
-@dataclass
-class MappingRC_TrainData:
-	
-	"""
-	An object to store training data for the Mapping RC. Takes as arguments 
-	a list of input signals and, optionally, any subset of some common targets.
-	Properties allow construction of some common combined targets, and stores
-	the number of samples.
-	"""
-	
-	signals:			List[np.ndarray]
-	parameters:		List[np.ndarray] = None
-	weights:			List[np.ndarray] = None
-	initial_states:	List[np.ndarray] = None
-	final_states:	List[np.ndarray] = None
-	
-	def __post_init__(self):
-		self.num_samples = len(self.signals)
-	
-	@property
-	def weights_and_ri(self):
-		if (self.initial_states, self.weights) != (None, None):
-			return [np.concatenate((self.initial_states[j], self.weights[j]),
-						  axis = 1) for j in range(self.num_samples)]
-		else:
-			msg = "weights_and_ri not defined. Please ensure that both " \
-				"initial_states and weights have been provided."
-			logging.error(msg)
-	
-	@property
-	def weights_and_rf(self):
-		if (self.final_states, self.weights) != (None, None):
-			return [np.concatenate((self.final_states[j], self.weights[j]),
-						  axis = 1) for j in range(self.num_samples)]
-		else:
-			msg = "weights_and_rf not defined. Please ensure that both " \
-				"final_states and weights have been provided."
-			logging.error(msg)
-	
-	@property
-	def weights_and_params(self):
-		if (self.parameters, self.weights) != (None, None):
-			return [np.concatenate((self.parameters[j], self.weights[j]),
-						  axis = 1) for j in range(self.num_samples)]
-		else:
-			msg = "weights_and_params not defined. Please ensure that both " \
-				"parameters and weights have been provided."
-			logging.error(msg)
-
 class Library():
     
     '''
@@ -938,7 +1114,7 @@ class Library():
             self.seeds = self.seeds + seeds
             self.generate_data()
             
-        else: #if self.parameters is None and self.data is not None
+        else:
             self.data = self.data + [
                 self.data_generator(
                     **{self.parameter_labels[i] : param_i for i, param_i in enumerate(parameter_instance)},
@@ -1072,7 +1248,7 @@ class Library():
                            to None to save space.
 		"""
         
-        save_copy = self.copy() #copy_library(self)
+        save_copy = self.copy()
         save_copy.data_generator = None
         
         if reduce:
@@ -1124,31 +1300,6 @@ class Library():
             
             with open(os.path.join(save_loc, file_name + ".pickle"), 'wb') as temp_file:
                 pickle.dump(save_copy, temp_file)
-
-'''
-def copy_library(
-        library : Library
-        ):
-    
-    """
-    A routine to return a copy of a provided Library object.
-    """
-    
-    new_library = Library(
-        data = library.data,
-        parameters = library.parameters,
-        parameter_labels = library.parameter_labels,
-        data_generator = library.data_generator,
-        generator_args = library.generator_args
-        )
-    new_library.seeds = library.seeds
-    if hasattr(library, "weights"):
-        new_library.weights = library.weights
-    if hasattr(library, "esn"):
-        new_library.esn = library.esn
-        
-    return new_library
-'''
     
 def get_open_loop_targets(
 		target_series:		np.ndarray,
@@ -1175,14 +1326,6 @@ def get_open_loop_targets(
 		
 	return open_loop_targets
 
-def convert_open_loop_predict_result(
-		predict_result:		rc.PredictResult
-		):
-	
-	
-	
-	return predict_result
-
 def get_library_weights(
         pred_esn:           rc.ESN,
         inputs:             Union[np.ndarray, List[np.ndarray]],
@@ -1203,128 +1346,3 @@ def get_library_weights(
     return [pred_esn.train(transient_length = transient_length[i],
                            inputs = inputs[i], **train_args
                            ).weights for i in range(len(inputs))]
-	
-def extract_MRS_training_data(
-        library_signals:        List[np.ndarray],
-        tshort:                 int,
-        esn:                    Union[rc.ESN, None],
-        transient:              Union[int, List[int], None],
-        library_targets:        Union[list[np.ndarray], np.ndarray, None] = None,
-        parameters:             Union[List[int], List[float], List[np.ndarray]] = None,
-        regression:             Callable = regressions.tikhonov(),
-        feature_function:       Union[features.ESNFeatureBase, Callable] = features.StatesOnly(),
-        batch_size:             int = None,
-        batch_length:           int = None,
-        start_time_separation:  int = 1,
-        incl_weights:           bool = True,
-        incl_initial_states:    bool = False,
-        incl_final_states:      bool = False,
-        open_loop_horizon:      int = None,
-        future_refit_len:       int = None,
-        refit_regression:       Callable = lambda prior: regressions.batched_ridge(prior_guess = prior)
-		):
-	
-    """
-    Extracts MRS-method training data (short signals and (r_0, W_out) pairs) from
-    a list of provided library signals.
-    """
-	
-    if parameters is not None:
-        for index, entry in enumerate(parameters):
-            if type(entry) in [float, int, np.int32, np.int64,
-                               np.float32, np.float64]:
-                parameters[index] = np.array([[entry]])
-				
-    if library_targets is not None:
-        if not isinstance(library_targets, list):
-            library_targets = [library_targets]
-
-    if isinstance(transient, int) or len(transient.shape) == 0:
-        transient = [transient] * len(library_signals)
-    elif isinstance(transient, list) and len(transient) != len(library_signals):
-        msg = "transient must have the same length as library_signals."
-        logging.error(msg)
-	
-    short_sigs = list()
-    sub_ws = list()
-    sub_r0s = list()
-    sub_r0s_resync = list()
-    sub_params = list()
-    regression_args = inspect.signature(regression).parameters
-    for i in range(len(library_signals)):
-        shorts_i = windower(library_signals[i][transient[i]:], tshort, axis = 0)
-        shorts_i = [short.T for short in shorts_i]
-        if isinstance(future_refit_len, int) and future_refit_len > 0:
-            shorts_i = shorts_i[:-future_refit_len]
-            shorts_inds = windower(np.arange(library_signals[i].shape[0])[transient[i]:],
-                                   tshort, axis = 0)[:-future_refit_len]
-            shorts_inds = [inds[-1] for inds in shorts_inds]
-            refits_i = [library_signals[i][:j + future_refit_len] for j in shorts_inds]
-            refits_i = [refit.reshape((-1, library_signals[i].shape[1])) for refit in refits_i]
-        num_shorts_i = len(list(shorts_i))
-		
-        if esn is not None and transient is not None:
-            train_args = {
-    			"transient_length" : transient[i],
-    			"feature_function" : feature_function,
-    			"regression" : regression
-    			}
-            if open_loop_horizon is None:
-                train_args["inputs"] = library_signals[i]
-            else:
-                train_args["inputs"] = library_signals[i][:-open_loop_horizon]
-            if library_targets is not None:
-                train_args["target_outputs"] = library_targets[i]
-            if "VS_T" in regression_args and "SS_T" in regression_args:
-                train_args["batch_size"] = batch_size
-                train_args["batch_length"] = batch_length
-    			
-            train_result = esn.train(**train_args)
-            w_out = train_result.weights
-		
-        for j in range(num_shorts_i):
-            if(j % start_time_separation == 0):
-                if esn is not None:
-                    short_sigs.append(shorts_i[j])
-                if esn is not None and incl_weights:
-                    if future_refit_len is None:
-                        sub_ws.append(w_out.reshape(1, -1))
-                    elif isinstance(future_refit_len, int) and future_refit_len > 0:
-                        train_args = {
-                			"transient_length" : shorts_inds[j],
-                			"feature_function" : feature_function,
-                			"regression" : refit_regression(prior = w_out),
-                        "batch_size" : batch_size,
-                        "batch_length" : batch_length
-                			}
-                        if open_loop_horizon is None:
-                            train_args["inputs"] = refits_i[j]
-                        else:
-                            train_args["inputs"] = refits_i[j][:-open_loop_horizon]
-                        if library_targets is not None:
-                            train_args["target_outputs"] = library_targets[i][
-                                :shorts_inds[j] + future_refit_len]
-                        sub_ws.append(esn.train(**train_args).weights.reshape(1, -1))
-                                      #- w_out.reshape((1, -1)))
-                if parameters is not None:
-                    sub_params.append(parameters[i])
-		
-        if esn is not None and incl_final_states:
-            r0s = train_result.states[transient[i] - 1 + tshort - 1:]
-            for j in range(r0s.shape[0]):
-                if(j % start_time_separation == 0):
-                    sub_r0s.append(r0s[j].reshape(1, -1))
-		
-        if esn is not None and incl_initial_states:
-            if tshort > 1:
-                r0s_resync = train_result.states[transient[i] - 1: - tshort + 1]
-            else:
-                r0s_resync = train_result.states[transient[i] - 1:]
-            for j in range(r0s_resync.shape[0]):
-                if(j % start_time_separation == 0):
-                    sub_r0s_resync.append(r0s_resync[j].reshape(1, -1))
-	
-    return MappingRC_TrainData(signals = short_sigs, parameters = sub_params,
-							weights = sub_ws, initial_states = sub_r0s_resync,
-							final_states = sub_r0s)
-

@@ -1,6 +1,5 @@
 #!/bin/bash
-#SBATCH -t 5760:00
-#SBATCH --mem-per-cpu=12288
+#SBATCH -t 900:00
 
 while getopts T:P:R:b:t:i:l:v:V:d:s:r:n:S:F:G:E:N:p:c:L:D:e:g:m: flag
 do
@@ -33,6 +32,6 @@ do
 	esac
 done
 
-source /home/user/miniconda3/etc/profile.d/conda.sh
+source /home/user/miniconda3/etc/profile.d/conda.sh #Activate conda from appropriate directory location
 conda activate rc_env
-python3 -u BigSim.py --test_system $test_system --partial_state $partial_state --reduce_fully $reduce_fully --train_basin $train_basin --test_length $test_length --IC_lim $IC_lim --lib_size $lib_size --val_grid_width $val_width --distance_threshold $dist_thresh --esn_size $rc_size --regularization $reg --noise_amplitude $noise --train_seed $seed --folder_one $fone --folder_two $ftwo --extra_name $extra_name --val_IC_lim $val_IC_lim --process_noise $process_noise --val_process_noise $val_process_noise --rc_time_step $rc_time_step --leakage $leakage --connections $connections --integrator_transient $integrator_transient --grid_val $grid_val --mean_reg $mean_reg
+python3 -u Get_Predictions.py --test_system $test_system --partial_state $partial_state --reduce_fully $reduce_fully --train_basin $train_basin --test_length $test_length --IC_lim $IC_lim --lib_size $lib_size --val_grid_width $val_width --distance_threshold $dist_thresh --esn_size $rc_size --regularization $reg --noise_amplitude $noise --train_seed $seed --folder_one $fone --folder_two $ftwo --extra_name $extra_name --val_IC_lim $val_IC_lim --process_noise $process_noise --val_process_noise $val_process_noise --rc_time_step $rc_time_step --leakage $leakage --connections $connections --integrator_transient $integrator_transient --grid_val $grid_val --mean_reg $mean_reg

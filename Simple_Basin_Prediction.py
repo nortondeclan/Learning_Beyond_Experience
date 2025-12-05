@@ -11,11 +11,11 @@ import matplotlib as mpl
 from typing import Union, List
 
 # Choose Figure
-fig_2 = False
-fig_3_ab = False
-fig_3_cf = False
-fig_6 = True #False 
-fig_7 = False
+fig_2 = True #False
+fig_3_abc = False
+fig_3_de = False
+fig_S1 = False
+fig_S5 = False 
 
 if fig_2:
     test_system = "duffing"
@@ -24,35 +24,26 @@ if fig_2:
     visible_dimensions = [0, 1]
     IC_rng = (-10, 10)
     val_IC_rng = (-10, 10)
-    reduce_fully = False
-elif fig_3_ab:
-    test_system = "duffing"
-    val_grid_width = 25
-    grid_val = True
-    visible_dimensions = [0]
-    val_IC_rng = (-10, 10)
-    IC_rng = (-10, 10) #Panels (a)-(c)
-    reduce_fully = False #Panels (a) and (b)
-elif fig_3_cf:
+    reduce_fully = False # If true, delete predicted trajectories to save memory. Instead, save only the predicted final state.
+elif fig_3_abc:
     test_system = "duffing"
     val_grid_width = 150
     grid_val = True
     visible_dimensions = [0]
     val_IC_rng = (-10, 10)
-    IC_rng = (-10, 10) #Panel (a)-(c)
-    #IC_rng = (-8, 8) #Panel (d)
-    #IC_rng = (-6, 6) #Panel (e)
-    #IC_rng = (-4, 4) #Panel (f)
-    reduce_fully = True #Panels (c) - (f)
-elif fig_6:
-    test_system = "magnetic_pendulum"
-    val_grid_width = 30
-    grid_val = False
-    visible_dimensions = [0, 1]
-    IC_rng = (-1.5, 1.5)
-    val_IC_rng = IC_rng
+    IC_rng = (-10, 10) #Panel (a)
+    IC_rng = (-7, 7) #Panel (b)
+    IC_rng = (-4, 4) #Panel (c)
+    reduce_fully = True #Panels (a) - (c)
+elif fig_3_de:
+    test_system = "duffing"
+    val_grid_width = 50
+    grid_val = True
+    visible_dimensions = [0]
+    val_IC_rng = (-10, 10)
+    IC_rng = (-10, 10)
     reduce_fully = False
-elif fig_7:
+elif fig_S1:
     test_system = "duffing"
     val_grid_width = 6
     grid_val = False
@@ -63,25 +54,34 @@ elif fig_7:
     #IC_rng = (-6, 6) #Panel (c)
     #IC_rng = (-4, 4) #Panel (d)
     reduce_fully = False
+elif fig_S5:
+    test_system = "magnetic_pendulum"
+    val_grid_width = 30
+    grid_val = False
+    visible_dimensions = [0, 1]
+    IC_rng = (-1.5, 1.5)
+    val_IC_rng = IC_rng
+    reduce_fully = False
 
 # Set training data parameters (those independent of test system)
 lib_length = 500
 lib_seed = 50
 grid_train = False
-train_basin = 0 #None to train across all basins
+train_basin = 0 # None to train across all basins
 basin_check_length = 4000 #Number of time steps to generate to establish convergence to desired attractor before including in training data
+mean_reg = True # If True, regularize with respect to the mean of square errors. If False, regularize w.r.t. the sum of squared errors
 
 # Set test data parameters (those independent of test system)
 val_lib_seed = 101
 val_length = 2000
 
 rotation = 0
-use_energies = True
-standardize = True #If true, standardizes inputs using standardizer routine
-standardizer = None #If None, defaults to standardization to mean zero and range one (if standardize = True)
+use_energies = True # Use energy to assess convergence (in the fully-observed case only)
+standardize = True # If true, standardizes inputs using standardizer routine
+standardizer = None # If None, defaults to standardization to mean zero and maximum absolute value one (if standardize = True)
 
 # Computational Choices
-#reduce_fully = False #If true, deletes predicted and true trajectories, and retains only initial and final conditions.
+reduce_fully = False #If true, deletes predicted and true trajectories, and retains only initial and final conditions.
 reduce_states = True #If true, deletes reservoir states after each prediction
 save_predictions = False
 safe_save_predictions = False
@@ -133,6 +133,8 @@ if test_system == "duffing":
         )
     val_generator_args = train_generator_args.copy()
     
+    fixed_pts = np.array([[-np.sqrt(-b/c), 0], [np.sqrt(-b/c), 0]])
+    
     if len(visible_dimensions) == 2:
         energy_func = tst.unforced_duffing_energy
         kinetic_func = tst._unforced_duffing_kinetic
@@ -144,11 +146,19 @@ if test_system == "duffing":
         kinetic_func = None
         potential_func = None
         energy_args = None
+        
         def end_processing(x):
-            distances = np.sum(np.square(x[-25:]), axis = 1)
-            return x[-25:][distances == distances.max()]
+            
+            fp_dist = np.inf
+            for fp in fixed_pts:
+                distances = np.sum(np.square(x[-25:] - fp), axis = 1)
+                if distances.max() < fp_dist:
+                    finals = x[-25:][distances == distances.max()]
+                    if finals.shape[0] > 1:
+                        finals = finals[0]
+                        
+            return finals
 
-    fixed_pts = np.array([[-np.sqrt(-b/c), 0], [np.sqrt(-b/c), 0]])    
     get_basin = bh.get_attractor(
         fixed_points = fixed_pts,
         use_energies = bool(len(visible_dimensions) == 2),
@@ -167,17 +177,20 @@ if test_system == "duffing":
         
     # Define Predictor
     esn_seed = 99
-    esn_size = 75
+    esn_size = 200
     input_strength = 1
     spectral_radius = .4
     bias_strength = .5
     leaking_rate = 1.
-    connections = .03
+    connections = 10
     feature_function = features.StatesOnly()
 
     # Set Training
     transient_length = 5
-    regularization = 1e-8
+    if mean_reg:
+        regularization = 1e-12
+    else:
+        regularization = 1e-8
     noise_amplitude = 1e-5
     batch_size = 10
     accessible_drives = -1
@@ -271,9 +284,18 @@ elif test_system == "magnetic_pendulum":
         kinetic_func = None
         potential_func = None
         energy_args = None
+        
         def end_processing(x):
-            distances = np.sum(np.square(x[-25:]), axis = 1)
-            return x[-25:][distances == distances.max()]
+            
+            fp_dist = np.inf
+            for fp in fixed_pts:
+                distances = np.sum(np.square(x[-25:] - fp), axis = 1)
+                if distances.max() < fp_dist:
+                    finals = x[-25:][distances == distances.max()]
+                    if finals.shape[0] > 1:
+                        finals = finals[0]
+                        
+            return finals
         
     get_basin = bh.get_attractor(
         fixed_points = mag_locs,
@@ -285,7 +307,7 @@ elif test_system == "magnetic_pendulum":
         visible_dimensions = visible_dimensions
         )
     
-    colors_map = ["#ff006e", "#3a86ff", "#ffbe0b"] #["#4cc9f0", "#f72585"] #["#00bbf9", "#f15bb5"] #"tab:cyan", "tab:orange"] #"firebrick", "darkslategray", "tab:orange"] #, np.nan: "black"}
+    colors_map = ["#ff006e", "#3a86ff", "#ffbe0b"]
     colormap = mpl.colors.LinearSegmentedColormap.from_list("custom", colors_map, N = len(colors_map))
     colormap.set_bad("white")
     colormap.set_under("white")
@@ -298,12 +320,15 @@ elif test_system == "magnetic_pendulum":
     esn_size = 2500
     bias_strength = .5
     leaking_rate = 1
-    connections = .03
+    connections = 10
     feature_function = features.StatesOnly()
 
     # Set Training
     transient_length = 25
-    regularization = 1e-6
+    if mean_reg:
+        regularization = 1e-10
+    else:
+        regularization = 1e-6
     noise_amplitude = 1e-3
     batch_size = 10
     accessible_drives = -1
@@ -367,19 +392,24 @@ predictor = bh.batch_predictor(
         input_dimension = len(visible_dimensions),
         seed = esn_seed,
         size = esn_size,
-        connections = int(connections * (esn_size)),
+        connections = connections,
         spectral_radius = spectral_radius,
         input_strength = input_strength,
         bias_strength = bias_strength,
         leaking_rate = leaking_rate
     ))
 
+if mean_reg:
+    num_fit = lib_length * lib_size - lib_size * (transient_length + 1)
+else:
+    num_fit = 1
+    
 # Train the predictor
 predictor.train(
     library = train_library,
     train_args = dict(
         transient_length = transient_length,
-        regression = regressions.batched_ridge(regularization = regularization),
+        regression = regressions.batched_ridge(regularization = num_fit * regularization),
         feature_function = feature_function,
         batch_size = batch_size,
         accessible_drives = accessible_drives
@@ -427,7 +457,10 @@ for basin_id in range(len(fixed_pts)):
         )
 print("Total Fraction Correct: ", total_correct)
 print("Total Fraction Incorrect: ", total_wrong)
+
 if grid_val:
+    
+    # Plot the true basins
     bh.basin_heatmap(
         library = val_library,
         overlay_pts = train_library.parameters,
@@ -443,6 +476,7 @@ if grid_val:
         box_linestyle = "--",
         fp_linewidth = 3,
         )
+    # Plot the RC-predicted basins
     bh.basin_heatmap(
         initial_pts = test_ics,
         final_pts = predicted_finals,
@@ -461,6 +495,7 @@ if grid_val:
         box_linestyle = "--",
         fp_linewidth = 3,
         )
+    # Plot the RC-predicted basins, highlighting errors
     bh.basin_error_heatmap(
         fixed_points = fixed_pts,
         initial_pts = test_ics,
@@ -495,6 +530,9 @@ print("Basin Volume Error: ", bve)
 print("Basin Volume Error Generization Guarantee: ", bve_thresh)
 print("Fraction Unphysical: ", f_unphys)
 
+font_s = 20
+correct_plot = 3
+incorrect_plot = 0
 if not reduce_fully:
     if test_system == "duffing" and len(visible_dimensions) > 1:
         if train_library.standardize:
@@ -502,19 +540,22 @@ if not reduce_fully:
                 u = datum) for datum in train_library.data]
         else:
             train_trajs = train_library.data
+            
+        # Plot the training trajectories
         bh.plot_state_space(
             train_trajs = train_trajs,
             train_color = 'tab:grey',
             legend = False,
             legend_loc = 'best',
             n_legend_cols = 1,
-            alpha = .5,
+            train_alpha = .5,
             fixed_points = fixed_pts,
             phase_xlims = (-10, 10),
             phase_ylims = (-20, 20),
             font_size = 20.,
             num_ticks = 5
             )
+        # Plot the predicted trajectories
         bh.plot_state_space(
             resync_trajs = [p.prediction.resync_inputs for p in predictions],
             pred_trajs = [p.prediction.reservoir_outputs for p in predictions],
@@ -538,60 +579,78 @@ if not reduce_fully:
         else:
             ylims = (-1.6, 1.6)
         
-        correct_count = 0
-        for p in predictions[::len(predictions)//50]:
-            if get_basin(p.true_finals) != train_basin and \
-                get_basin(p.predicted_finals) != train_basin:
-                    if correct_count == 1:
-                        print(p.initial_pts)
-                        rch.plot_predict_result(
-                            prediction = p.prediction,
-                            frame_legend = False,
-                            legend_ax = 0,
-                            n_legend_cols = 3,
-                            figsize = (9, 3),
-                            incl_tvalid = False,
-                            ylabel = "$x$",
-                            font_size = 20,
-                            prediction_color = "#4361ee",
-                            truth_color = "#6c757d",
-                            linewidth = 5,
-                            xlims = (-30, val_length + 30), #(-3 * test_length, val_length + 3 * test_length),
-                            ylims = ylims,
-                            fig_alpha = 0,
-                            line_alpha = .75,
-                            vert_linewidth = 2.5,
-                            t0 = test_length - 1
-                            )
-                    correct_count += 1
-                
-        incorrect_count = 0
-        for p in predictions:
-            if get_basin(p.true_finals) == train_basin and \
-                get_basin(p.predicted_finals) != train_basin:
-                    if incorrect_count == 2:
-                        print(p.initial_pts)
-                        rch.plot_predict_result(
-                            prediction = p.prediction,
-                            frame_legend = False,
-                            legend_ax = 0,
-                            n_legend_cols = 3,
-                            figsize = (9, 3),
-                            incl_tvalid = False,
-                            ylabel = "$x$",
-                            font_size = 20,
-                            prediction_color = "#4361ee",
-                            truth_color = "#6c757d",
-                            linewidth = 5,
-                            xlims = (-30, val_length + 30), #(-3 * test_length, val_length + 3 * test_length),
-                            ylims = ylims,
-                            fig_alpha = 0,
-                            line_alpha = .75,
-                            vert_linewidth = 2.5,
-                            t0 = test_length - 1
-                            )
-                    incorrect_count += 1
-        
+        with mpl.rc_context({"font.size" : font_s}):
+            sfig, sax = plt.subplots(
+                2, 1, figsize = (8.5, 6),
+                constrained_layout = True, sharex = True
+                )
+            
+            correct_count = 0
+            # Plot correct predicted trajectories in the partially-observed (one-dimensional) case
+            for p in predictions[::len(predictions)//50]:
+                if get_basin(p.true_finals) != train_basin and \
+                    get_basin(p.predicted_finals) != train_basin:
+                        if correct_count == correct_plot:
+                            print(p.initial_pts)
+                            rch.plot_predict_result(
+                                prediction = p.prediction,
+                                frame_legend = False,
+                                legend_ax = 0,
+                                n_legend_cols = 3,
+                                axes = [sax[0]],
+                                fig = sfig,
+                                incl_tvalid = False,
+                                ylabel = "$x$",
+                                xlabel = None,
+                                font_size = font_s,
+                                prediction_color = "#4361ee",
+                                truth_color = "#6c757d",
+                                linewidth = 5,
+                                xlims = (-30, val_length + 30),
+                                ylims = ylims,
+                                fig_alpha = 0,
+                                line_alpha = .75,
+                                vert_linewidth = 2.5,
+                                t0 = test_length - 1,
+                                xticks = np.linspace(0, val_length, 5),
+                                yticks = np.linspace(ylims[0] + .5, ylims[1] - .5, 5)
+                                )
+                        correct_count += 1
+                    
+            incorrect_count = 0
+            # Plot incorrect predicted trajectories in the partially-observed (one-dimensional) case
+            for p in predictions:
+                if get_basin(p.true_finals) == train_basin and \
+                    get_basin(p.predicted_finals) != train_basin:
+                        if incorrect_count == incorrect_plot:
+                            print(p.initial_pts)
+                            rch.plot_predict_result(
+                                prediction = p.prediction,
+                                make_legend = False,
+                                frame_legend = False,
+                                legend_ax = 0,
+                                n_legend_cols = 3,
+                                axes = [sax[1]],
+                                fig = sfig,
+                                incl_tvalid = False,
+                                ylabel = "$x$",
+                                xlabel = "Time (Time Steps, $\\Delta t$)",
+                                font_size = font_s,
+                                prediction_color = "#4361ee",
+                                truth_color = "#6c757d",
+                                linewidth = 5,
+                                xlims = (-30, val_length + 30),
+                                ylims = ylims,
+                                fig_alpha = 0,
+                                line_alpha = .75,
+                                vert_linewidth = 2.5,
+                                t0 = test_length - 1,
+                                num_xticks = 3,
+                                xticks = np.linspace(0, val_length, 5),
+                                yticks = np.linspace(ylims[0] + .5, ylims[1] - .5, 5)
+                                )
+                        incorrect_count += 1
+                        
     if test_system == "magnetic_pendulum":
         with mpl.rc_context({"font.size" : 20}):
             num_each = 2,
@@ -651,6 +710,8 @@ if not reduce_fully:
                 predicted_basins = [get_basin(p.predicted_finals) for p in np.array(predictions)[p_basin_ids]]
                 print(basin_id)
                 print(len(b_predictions))
+                
+                # Fig S5 Panels (a) - (c)
                 rch.plot_predict_result_errors(
                     predictions = b_predictions,
                     predicted_basins = predicted_basins,
@@ -696,6 +757,8 @@ if not reduce_fully:
                             ax.axhline(distance_threshold, c = "k", linestyle = "--")
                     else:
                         e_axs.axhline(distance_threshold, c = "k", linestyle = "--")
+                
+                # Fig S5 Panel (d)
                 rch.plot_errors_histograms(
                     predictions = b_predictions,
                     predicted_basins = predicted_basins,
@@ -718,5 +781,6 @@ if not reduce_fully:
                     bar_scale = bar_scale,
                     bar_error_scale = bar_error_scale,
                     t0 = -25,
-                    t1 = None                    
+                    t1 = None,
+                    make_legend = basin_id == len(fixed_pts) - 1
                     )

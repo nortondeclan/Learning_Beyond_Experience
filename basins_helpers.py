@@ -75,6 +75,7 @@ class basin_predictor_base(ABC):
             ):
         pass
 
+
 #%% Batch Basin Predictor
 
 class batch_predictor(basin_predictor_base):
@@ -262,31 +263,26 @@ class batch_predictor(basin_predictor_base):
                     )
             
             if library.standardize:
-                #true_finals = finals/library.standardizer.scale[:2]
-                #true_finals += -library.standardizer.shift[:2]
                 if end_processing is None:
                     pred_finals = library.standardizer.unstandardize(
-                        u = prediction.reservoir_outputs)[-1].flatten()[:2]
+                        u = prediction.reservoir_outputs)[-1].flatten()
                 else:
                     pred_finals = end_processing(library.standardizer.unstandardize(
-                        u = prediction.reservoir_outputs)).flatten()[:2]
+                        u = prediction.reservoir_outputs)).flatten()
                 result_args = dict(
                     initial_pts = library.standardizer.unstandardize(
-                        u = signal)[0].flatten()[:2],
+                        u = signal)[0].flatten(),
                     predicted_finals = pred_finals,
-                    #predicted_finals = library.standardizer.unstandardize(
-                    #    u = prediction.reservoir_outputs)[-1].flatten()[:2],
-                    true_finals = finals #true_finals
+                    true_finals = finals
                 )
             else:
                 if end_processing is None:
-                    pred_finals = prediction.reservoir_outputs[-1].flatten()[:2]
+                    pred_finals = prediction.reservoir_outputs[-1].flatten()
                 else:
                     pred_finals = end_processing(prediction.reservoir_outputs).flatten()[:2]
                 result_args = dict(
-                    initial_pts = signal[0].flatten()[:2],
+                    initial_pts = signal[0].flatten(),
                     predicted_finals = pred_finals,
-                    #predicted_finals = prediction.reservoir_outputs[-1].flatten()[:2],
                     true_finals = finals
                     )
             if not reduce_fully:
@@ -309,13 +305,7 @@ class batch_predictor(basin_predictor_base):
             if reduce_states and not reduce_fully:
                 pred_i.prediction = rch.reduce_prediction(pred_i.prediction)
             
-            predictions.append(pred_i) #basin_prediction(predictor = "batch", **result_args))
-        
-        """
-        if reduce_states and not reduce_fully:
-            for prediction in predictions:
-                prediction.prediction = rch.reduce_prediction(prediction.prediction)
-        """
+            predictions.append(pred_i)
         
         if save_predictions:
             if file_name is None:
@@ -442,7 +432,7 @@ class batch_predictor(basin_predictor_base):
             
             with open(os.path.join(save_loc, file_name + ".pickle"), 'wb') as temp_file:
                 pickle.dump(save_copy, temp_file)
-
+                
 #%% Construct a Library
 
 def get_fixed_basin_ICs(
@@ -450,13 +440,16 @@ def get_fixed_basin_ICs(
         trajectory_generator:   Callable,
         get_basin:              Callable,
         seed:                   int,
-        fp_id:                  int = 0,
+        fp_id:                  Union[list, int] = 0,
         IC_rng:                 tuple = (-1, 1),
         end_processing:         Callable = None
         ):
     
     if end_processing is None:
-        end_processing = lambda x: x[-1][:2] #trajectory[-1][:2]
+        end_processing = lambda x: x[-1][:2]
+    
+    if isinstance(fp_id, int):
+        fp_id = [fp_id]
     
     usable_ICs = []
     num_parameters = len(trajectory_generator.parameter_labels)
@@ -466,8 +459,8 @@ def get_fixed_basin_ICs(
         args = {trajectory_generator.parameter_labels[i] : IC[i]
                 for i in range(num_parameters)}
         trajectory = trajectory_generator(**args, seed = seed)
-        fp = get_basin(end_processing(trajectory)) #trajectory[-1][:2])
-        if fp == fp_id:
+        fp = get_basin(end_processing(trajectory))
+        if fp in fp_id:
             usable_ICs.append(IC)
             
     return usable_ICs
@@ -503,7 +496,8 @@ def get_lib(
         lib_length:             int = None,
         basin_check_length:     int = None,
         seed:                   int = None,
-        train_basin:            float = None,
+        train_basin:            Union[list, int] = None,
+        initial_conditions:     list = None,
         grid:                   bool = False,
         file_name:              str = None,
         forward_length:         int = None,
@@ -512,14 +506,20 @@ def get_lib(
         IC_rng:                 tuple = (-1, 1),
         standardizer:           rc.Standardizer = None,
         standardize:            bool = False,
-        end_processing:         Callable = None
+        end_processing:         Callable = None,
+        conditioner:            Callable = None,
+        conditioner_args:       dict = {},
+        end_not_state:          bool = False
         ):
     
     if end_processing is None:
-        end_processing = lambda x: x[-1, :2]
+        end_processing = lambda x: x[-1]
     
     if lib_length is not None and (forward_length, backward_length) == (None, None):
         forward_length = lib_length
+        
+    if isinstance(train_basin, int):
+        train_basin = [train_basin]
     
     if file_name is None:
         
@@ -541,8 +541,41 @@ def get_lib(
     if file_name is not None:
         with open(file_name, "rb") as tmp_file:
             library = pickle.load(tmp_file)
-            library.final_parameters = [np.array(list(end_processing(series))) #series[-1, :2]))
+            if not end_not_state:
+                library.final_parameters = [np.array(list(end_processing(series)))
+                                            for series in library.data]
+    elif initial_conditions is not None:
+        if forward_length is not None:
+            library = rch.Library(
+                data = None,
+                parameters = initial_conditions,
+                parameter_labels = forward_generator.parameter_labels,
+                data_generator = forward_generator,
+                generator_args = {},
+                seed = seed,
+                standardize = standardize,
+                standardizer = standardizer
+                )
+            library.generate_data()
+            if not end_not_state:
+                library.final_parameters = [np.array(list(end_processing(series)))
                                         for series in library.data]
+        
+        if backward_length is not None:
+            back_library = rch.Library(
+                data = None,
+                parameters = initial_conditions,
+                parameter_labels = backward_generator.parameter_labels,
+                data_generator = backward_generator,
+                generator_args = {},
+                seed = seed,
+                standardize = standardize,
+                standardizer = standardizer
+                )
+            back_library.generate_data()
+            if not end_not_state:
+                back_library.final_parameters = [np.array(list(end_processing(series)))
+                                             for series in back_library.data]
     elif grid:
         x_rng = (IC_rng[0], IC_rng[1], int(np.sqrt(lib_size)))
         y_rng = (IC_rng[0], IC_rng[1], int(np.sqrt(lib_size)))
@@ -550,11 +583,9 @@ def get_lib(
             library = rch.Library(
                 data = None,
                 parameters = None,
-                parameter_labels = forward_generator.parameter_labels, #["x0", "y0"],
-                data_generator = forward_generator, #trajectory_generator,
-                generator_args = {}, #"transient_length" : transient_length,
-                                  #"return_length" : lib_length + transient_length,
-                                  #"return_dims" : return_dims},
+                parameter_labels = forward_generator.parameter_labels,
+                data_generator = forward_generator,
+                generator_args = {},
                 seed = seed,
                 standardize = standardize,
                 standardizer = standardizer
@@ -563,7 +594,8 @@ def get_lib(
                 ranges = [x_rng, y_rng],
                 seed = seed
                 )
-            library.final_parameters = [np.array(list(end_processing(series))) #series[-1, :2]))
+            if not end_not_state:
+                library.final_parameters = [np.array(list(end_processing(series)))
                                         for series in library.data]
         if backward_length is not None:
             if forward_length is not None:
@@ -573,24 +605,30 @@ def get_lib(
             back_library = rch.Library(
                 data = None,
                 parameters = None,
-                parameter_labels = backward_generator.parameter_labels, #["x0", "y0"],
-                data_generator = backward_generator, #trajectory_generator,
-                generator_args = {}, #"transient_length" : transient_length,
-                                  #"return_length" : lib_length + transient_length,
-                                  #"return_dims" : return_dims},
+                parameter_labels = backward_generator.parameter_labels,
+                data_generator = backward_generator,
+                generator_args = {},
                 seed = seed,
                 standardize = standardize,
-                standardizer = b_standardizer # May need enforce consistent with forward standardization
+                standardizer = b_standardizer
                 )
             back_library.generate_grid(
                 ranges = [x_rng, y_rng],
                 seed = seed
                 )
-            back_library.final_parameters = [np.array(list(end_processing(series))) #series[-1, :2]))
+            if not end_not_state:
+                back_library.final_parameters = [np.array(list(end_processing(series)))
                                              for series in back_library.data]
     else:
         if train_basin is None:
-            train_ICs = list(default_rng(seed).uniform(IC_rng[0], IC_rng[1], (lib_size, 2)))
+            train_ICs = list(default_rng(seed).uniform(IC_rng[0], IC_rng[1], (lib_size, len(forward_generator.parameter_labels))))
+        elif conditioner is not None:
+            train_ICs = conditioner(
+                num_ICs = lib_size,
+                trajectory_generator = check_generator,
+                seed = seed,
+                **conditioner_args
+                )
         else:
             train_ICs = get_fixed_basin_ICs(
                 num_ICs = lib_size,
@@ -605,34 +643,32 @@ def get_lib(
             library = rch.Library(
                 data = None,
                 parameters = train_ICs,
-                parameter_labels = forward_generator.parameter_labels, #["x0", "y0"],
-                data_generator = forward_generator, #trajectory_generator,
-                generator_args = {}, #"transient_length" : transient_length,
-                                  #"return_length" : lib_length + transient_length,
-                                  #"return_dims" : return_dims},
+                parameter_labels = forward_generator.parameter_labels,
+                data_generator = forward_generator,
+                generator_args = {},
                 seed = seed,
                 standardize = standardize,
                 standardizer = standardizer
                 )
             library.generate_data()
-            library.final_parameters = [np.array(list(end_processing(series))) #series[-1, :2]))
+            if not end_not_state:
+                library.final_parameters = [np.array(list(end_processing(series)))
                                         for series in library.data]
         
         if backward_length is not None:
             back_library = rch.Library(
                 data = None,
                 parameters = train_ICs,
-                parameter_labels = backward_generator.parameter_labels, #["x0", "y0"],
-                data_generator = backward_generator, #trajectory_generator,
-                generator_args = {}, #"transient_length" : transient_length,
-                                  #"return_length" : lib_length + transient_length,
-                                  #"return_dims" : return_dims},
+                parameter_labels = backward_generator.parameter_labels,
+                data_generator = backward_generator,
+                generator_args = {},
                 seed = seed,
                 standardize = standardize,
                 standardizer = standardizer
                 )
             back_library.generate_data()
-            back_library.final_parameters = [np.array(list(end_processing(series))) #series[-1, :2]))
+            if not end_not_state:
+                back_library.final_parameters = [np.array(list(end_processing(series)))
                                              for series in back_library.data]
     
     if forward_length is None:
@@ -647,19 +683,26 @@ def get_lib(
     if get_basin is not None:
         library.get_basin = get_basin
         
-    if library.standardize:
-        final_parameters = np.array(library.final_parameters) / library.standardizer.scale[:2]
-        final_parameters -= library.standardizer.shift[:2]
+    if library.standardize and not end_not_state:
+        final_parameters = np.array(library.final_parameters) / library.standardizer.scale
+        final_parameters -= library.standardizer.shift
         library.final_parameters = list(final_parameters)
+    elif library.standardize and end_not_state:
+        library.final_parameters = [np.array(list(end_processing(
+            library.standardizer.unstandardize(u = series))))
+            for series in library.data]
+    elif end_not_state:
+        library.final_parameters = [np.array(list(end_processing(series)))
+                                    for series in library.data]
     
     return library
 
 #%% Check Fixed Points
 def get_attractor(
-        fixed_points:       np.ndarray, # = None,
+        fixed_points:       np.ndarray,
         energy_func:        Callable = None,
         energy_args:        dict = {},
-        distance_threshold: float = None, #.05
+        distance_threshold: float = None,
         return_coords:      bool = False,
         energy_barrier_loc: Union[List, np.ndarray] = np.zeros(4),
         use_energies:       bool = True,
@@ -675,15 +718,24 @@ def get_attractor(
             ):
         
         num_fps = len(fixed_points)
-        dists = np.array([
-            np.sqrt(np.sum(np.square(
-                final_loc - fixed_points[i, np.array(visible_dimensions)[np.array(visible_dimensions) < fixed_points.shape[1]]])))
-            for i in range(num_fps)
-            ])
-        #for i in range(num_fps):
-        #    print(fixed_points[i, visible_dimensions])
-        #print(dists)
-        #increment = 1./(num_fps - 1.)
+        if len(np.nonzero(np.array(visible_dimensions)[np.array(visible_dimensions) > fixed_points.shape[1]])[0]) > 0:
+            dists = np.array([
+                np.sqrt(np.sum(np.square(
+                    final_loc - fixed_points[i][np.array(visible_dimensions)[np.array(visible_dimensions) < fixed_points.shape[1]]])))
+                for i in range(num_fps)
+                ])
+        elif len(visible_dimensions) < fixed_points.shape[1]:
+            dists = np.array([
+                np.sqrt(np.sum(np.square(
+                    final_loc - fixed_points[i, np.array(visible_dimensions)])))
+                for i in range(num_fps)
+                ])
+        elif len(visible_dimensions) == fixed_points.shape[1]:
+            dists = np.array([
+                np.sqrt(np.sum(np.square(
+                    final_loc - fixed_points[i])))
+                for i in range(num_fps)
+                ])
         
         if use_energies:
             energy = energy_func(state = final_loc, **energy_args)
@@ -724,24 +776,14 @@ def basin_volume_error(
         pred_basins = [get_basin(p.predicted_finals) for p in basin_predictions]
     
     if isinstance(true_basins, list):
-        true_basins = np.array(true_basins) #, dtype = int)
+        true_basins = np.array(true_basins)
         
     if isinstance(pred_basins, list):
-        pred_basins = np.array(pred_basins) #, dtype = int)
+        pred_basins = np.array(pred_basins)
         
     if ignore_true_nans:
         true_basins = true_basins[np.argwhere(~np.isnan(true_basins))].flatten()
         pred_basins = pred_basins[np.argwhere(~np.isnan(true_basins))].flatten()
-     
-    """
-    print(true_basins.shape)
-    print(pred_basins.shape)
-    
-    true_basins = true_basins.astype(int)
-    for i in range(len(pred_basins)):
-        if not np.isnan(pred_basins[i]):
-            pred_basins[i] = int(pred_basins[i])
-    """
         
     true_basin_ids, true_counts = np.unique(true_basins, return_counts = True)
     pred_counts = np.array([len(np.where(pred_basins == basin_id)[0]) for basin_id in true_basin_ids])
@@ -754,21 +796,27 @@ def basin_volume_error(
     else:
         num_unphysical = 0
     
-    """
-    print(true_counts)
-    print(pred_counts)
-    print(len(true_basins))
-    print(error)
-    print(num_unphysical)
-    """    
-    
     error = (error + num_unphysical) / (2 * len(true_basins))
     fraction_unphysical = num_unphysical / len(true_basins)
     all_basins_predicted = min(true_counts) / len(true_basins)
     pred_errors = pred_errors/len(true_basins)
     
-    return error, pred_errors, fraction_unphysical, all_basins_predicted
+    return error, pred_errors, fraction_unphysical, all_basins_predicted    
+
+def sort_by_basin(
+        predictions:    List[basin_prediction],
+        get_basin:      Callable
+        ):
     
+    basin_sorted = {}
+    for prediction in predictions:
+        basin_id = get_basin(prediction.true_finals)
+        if basin_id in basin_sorted.keys():
+            basin_sorted[basin_id].append(prediction)
+        else:
+            basin_sorted[basin_id] = [prediction]
+    
+    return basin_sorted
 
 #%% Plotting
 
@@ -784,7 +832,7 @@ def basin_heatmap(
         title:          str = None,
         overlay_marker: str = "x",
         overlay_color:  str = "k",
-        overlay_size:   float = 20., #None,
+        overlay_size:   float = 20.,
         overlay_colors: Union[list, str] = "k",
         transparency:   bool = True,
         equal_aspect:   bool = False,
@@ -798,26 +846,20 @@ def basin_heatmap(
         fp_linewidth:   float = 2.,
         skip_heatmap:   bool = False,
         label_axes:     bool = True,
+        xlabel:         str = "$x_0$",
+        ylabel:         str = "$y_0$",
         xlims:          tuple = None,
-        ylims:          tuple = None
+        ylims:          tuple = None,
+        plot_fixed_pts: bool = True,
+        fp_dim0:        int = 0,
+        fp_dim1:        int = 1,
+        ax:             mpl.axes._axes.Axes = None,
+        figure:         mpl.figure.Figure = None
         ):
     
     if library is not None:
         logging.warning("Using library data. Ignoring initial_pts and final_pts, if provided.")
-        """
-        if library.standardize:
-            '''
-            initial_pts = np.array(library.parameters) + library.standardizer.shift[:2]
-            initial_pts *= library.standardizer.scale[:2]
-            final_pts = np.array(library.final_parameters) + library.standardizer.shift[:2]
-            final_pts *= library.standardizer.scale[:2]
-            '''
-            initial_pts = np.array(library.parameters) / library.standardizer.scale[:2]
-            initial_pts -= library.standardizer.shift[:2]
-            final_pts = np.array(library.final_parameters) / library.standardizer.scale[:2]
-            final_pts -= library.standardizer.shift[:2]
-        else:
-        """
+
         initial_pts = np.array(library.parameters)
         final_pts = np.array(library.final_parameters)
         if get_fixed_pt is None and hasattr(library, "get_basin"):
@@ -833,19 +875,14 @@ def basin_heatmap(
         if isinstance(final_pts, list):
             final_pts = np.array(final_pts)
     
-    if colormap is None:
-        #colors_map = ["magenta", "yellow", "black"]
-        colors_map = ["firebrick", "darkslategray", "tab:orange"] #, np.nan: "black"}
-        colormap = mpl.colors.LinearSegmentedColormap.from_list("custom", colors_map, N = len(colors_map))
-        colormap.set_bad("white")
-    
     grid_width = int(np.sqrt(len(initial_pts)))
 
     with mpl.rc_context({'font.size': font_size}):
-        figure, _ = plt.subplots(figsize = (6.5, 6), constrained_layout = True,
-                                 sharex = True, sharey = True)
-        
-        ax = plt.subplot2grid(shape = (1, 1), loc = (0, 0), colspan = 1, fig = figure)
+        if ax is None:
+            figure, _ = plt.subplots(figsize = (6.5, 6), constrained_layout = True,
+                                     sharex = True, sharey = True)
+            
+            ax = plt.subplot2grid(shape = (1, 1), loc = (0, 0), colspan = 1, fig = figure)
             
         mesh_args = {
             "shading" : "nearest", "cmap" : colormap,
@@ -867,21 +904,15 @@ def basin_heatmap(
         
         if not skip_heatmap:
             ax.pcolormesh(x, y, finals, **mesh_args, alpha = basin_alpha)
-         
-        if label_axes:
-            ax.set_xlabel("$x_0$")
-            ax.set_ylabel("$y_0$")
         
         if title is not None:
             ax.set_title(title)
-            
-        ax.scatter(fixed_points[:,0], fixed_points[:,1],
-                   marker = "x",
-                   s = 50.,
-                   linewidths = fp_linewidth,
-                   #s = 20.,
-                   c = "k"
-                   )
+        
+        if plot_fixed_pts:
+            ax.scatter(fixed_points[:,fp_dim0], fixed_points[:,fp_dim1], marker = "x",
+                       s = 50.,
+                       linewidths = fp_linewidth,
+                       c = "k")
         
         if overlay_pts is not None:
             overlay_pts = np.array(overlay_pts)
@@ -903,8 +934,6 @@ def basin_heatmap(
                       color = box_color, linestyle = box_linestyle, alpha = box_alpha)
             
         if num_ticks is not None:
-            #ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_ticks))
-            #ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_ticks))
             ax.set_xticks(np.linspace(min(initial_pts[:, 0]), max(initial_pts[:, 0]), num_ticks))
             ax.set_yticks(np.linspace(min(initial_pts[:, 1]), max(initial_pts[:, 1]), num_ticks))
         
@@ -913,7 +942,11 @@ def basin_heatmap(
         if ylims is not None:
             ax.set_ylim(*ylims)
         
-    if transparency:
+        if label_axes:
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+        
+    if transparency and figure is not None:
         figure.patch.set_alpha(0)
             
 def basin_error_heatmap(
@@ -928,7 +961,7 @@ def basin_error_heatmap(
         overlay_pts:        Union[List, np.ndarray] = None,
         overlay_marker:     str = "x",
         overlay_color:      str = "k",
-        overlay_size:       float = 20., #None,
+        overlay_size:       float = 20.,
         transparency:       bool = True,
         equal_aspect:       bool = False,
         num_ticks:          int = None,
@@ -938,7 +971,16 @@ def basin_error_heatmap(
         box_linestyle:      Union[str, tuple] = "-",
         box_alpha:          float = 1,
         basin_alpha:        float = 0.75,
-        fp_linewidth:       float = 2.
+        fp_linewidth:       float = 2.,
+        ax:                 Union[np.ndarray, mpl.axes._axes.Axes] = None,
+        figure:             mpl.figure.Figure = None,
+        xlabel:             str = "$x_0$",
+        ylabel:             str = "$y_0$",
+        plot_fixed_pts:     bool = True,
+        fp_dim0:            int = 0,
+        fp_dim1:            int = 1,
+        xlims:              tuple = None,
+        ylims:              tuple = None
         ):
     
     if isinstance(initial_pts, list):
@@ -947,24 +989,19 @@ def basin_error_heatmap(
         predicted_finals = np.array(predicted_finals)
     if isinstance(true_finals, list):
         true_finals = np.array(true_finals)
-        
-    #print(predicted_finals)
-    '''
-    if colormap is None:
-        #colors_map = ["magenta", "yellow", "black"]
-        colors_map = ["firebrick", "darkslategray", "tab:orange"] #, np.nan: "black"}
-        colormap = mpl.colors.LinearSegmentedColormap.from_list("custom", colors_map, N = len(colors_map))
-        colormap.set_bad("white")
-    '''
+
     grid_width = int(np.sqrt(len(initial_pts)))
 
-    with mpl.rc_context({'font.size': font_size}):  
-        #figure, _ = plt.subplots(figsize = (14, 8), constrained_layout = True,
-        #                      sharex = True, sharey = True)
-        figure, _ = plt.subplots(figsize = (6.5, 6), constrained_layout = True,
-                                 sharex = True, sharey = True)
+    with mpl.rc_context({'font.size': font_size}):
         
-        ax = plt.subplot2grid(shape = (1, 1), loc = (0, 0), colspan = 1, fig = figure)
+        if isinstance(ax, np.ndarray):
+            ax = ax[0]
+        
+        elif ax is None:
+            figure, _ = plt.subplots(figsize = (6.5, 6), constrained_layout = True,
+                                     sharex = True, sharey = True)
+            
+            ax = plt.subplot2grid(shape = (1, 1), loc = (0, 0), colspan = 1, fig = figure)
             
         mesh_args = {
             "shading" : "nearest", "cmap" : colormap,
@@ -990,32 +1027,29 @@ def basin_error_heatmap(
         finals = np.copy(predictions)
         
         condition1 = errors != 0
-        condition2 = ~np.isnan(predictions) # != np.nan #-np.inf
+        condition2 = ~np.isnan(predictions)
         finals[np.logical_and(condition1, condition2)] = 10**15
         finals[np.isnan(predictions)] = -10**15
-        #print(np.array(np.nonzero(finals == 10**15)).shape)
-        #print(np.array(np.nonzero(finals == -10**15)).shape)
         
         ax.pcolormesh(x, y, finals, **mesh_args, alpha = basin_alpha)
-        #figure.colorbar(pcm, ax = ax, extend = "both")
             
-        ax.set_xlabel("$x_0$")
-        ax.set_ylabel("$y_0$")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
         
         if title is not None:
             ax.set_title(title)
-            
-        ax.scatter(fixed_points[:,0], fixed_points[:,1], marker = "x",
-                   s = 50., #100.,
-                   linewidths = fp_linewidth, #2, #3,
-                   #s = 20.,
-                   c = "k")#"white")
+        
+        if plot_fixed_pts:
+            ax.scatter(fixed_points[:,fp_dim0], fixed_points[:,fp_dim1], marker = "x",
+                       s = 50.,
+                       linewidths = fp_linewidth,
+                       c = "k")
         
         if overlay_pts is not None:
             overlay_pts = np.array(overlay_pts)
             ax.scatter(overlay_pts[:,0], overlay_pts[:,1],
-                       marker = overlay_marker, s = overlay_size, #20.,
-                       c = overlay_color) #"k") #"tab:grey")
+                       marker = overlay_marker, s = overlay_size,
+                       c = overlay_color)
             
         if equal_aspect:
             ax.set_aspect('equal')
@@ -1031,12 +1065,10 @@ def basin_error_heatmap(
                       color = box_color, linestyle = box_linestyle, alpha = box_alpha)
         
         if num_ticks is not None:
-            #ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_ticks))
-            #ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_ticks))
             ax.set_xticks(np.linspace(min(initial_pts[:, 0]), max(initial_pts[:, 0]), num_ticks))
             ax.set_yticks(np.linspace(min(initial_pts[:, 1]), max(initial_pts[:, 1]), num_ticks))
     
-    if transparency:
+    if transparency and figure is not None:
         figure.patch.set_alpha(0)
             
 def plot_energies(
@@ -1139,7 +1171,6 @@ def plot_prediction_and_energies(
     else:
         forecast = basin_prediction.prediction.reservoir_outputs
         truth = basin_prediction.prediction.target_outputs
-        f_resyncs = basin_prediction.prediction.resync_outputs
         t_resyncs = basin_prediction.prediction.resync_inputs
         if max_horizon is not None and max_horizon < forecast.shape[0]:
             forecast = forecast[: max_horizon]
@@ -1173,44 +1204,35 @@ def plot_prediction_and_energies(
                     ax = [ax0, ax1]
                 for i in range(forecast.shape[1]):
                     ax.append(fig.add_subplot(spec[i, 0]))
-                #ax10 = fig.add_subplot(spec[0, 0])
-                #ax11 = fig.add_subplot(spec[1, 0])#, sharex = ax10)
-                #ax12 = fig.add_subplot(spec[2, 0])#, sharex = ax10)
-                #ax13 = fig.add_subplot(spec[3, 0])#, sharex = ax10)
-                #ax = np.array([ax0, ax10, ax11, ax12, ax13]).flatten()
                 ax = np.array(ax).flatten()
                 cbar_locs = ["top", "right"]
             else:
-                fig = plt.figure(figsize = (15, 8), constrained_layout = True)#, squeeze = False)
+                fig = plt.figure(figsize = (15, 8), constrained_layout = True)
                 spec = fig.add_gridspec(1, 2)
                 ax0 = fig.add_subplot(spec[0, 0])
                 ax1 = fig.add_subplot(spec[0, 1])
                 ax = np.array([ax0, ax1]).flatten()
                 cbar_locs = ["top", "right"]
                 
-            #ax[0].scatter(x = f_resyncs[:, 0], y = f_resyncs[:, 1], c = "k", marker = "o", s = 1.)
             ax[0].scatter(x = t_resyncs[:, 0], y = t_resyncs[:, 1], c = "k", marker = "*", s = 1.)            
             p_cm = ax[0].scatter(x = x, y = y,
-                                 c = np.arange(len(forecast)), cmap = p_cmap, #c = colors,
+                                 c = np.arange(len(forecast)), cmap = p_cmap,
                                  marker = "o", s = 1.)
             t_cm = ax[0].scatter(x = truth_x, y = truth_y,
-                                 c = np.arange(len(truth)), cmap = t_cmap, #c = truth_colors,
+                                 c = np.arange(len(truth)), cmap = t_cmap,
                                  marker = "*", s = 1.)
             if fixed_points is not None:
                 ax[0].scatter(x = fixed_points[:, 0], y = fixed_points[:, 1],
                               c = "k", marker = "o", s = 5., label = "Magnets")
-            #ax.plot(x, y, c = colors, marker = "o")
-            #ax.plot(truth_x, truth_y, c = truth_colors, marker = "*")
             ax[0].set_xlabel("$x$")
             ax[0].set_ylabel("$y$")
-            ax[0].set_xlim(phase_xlims) #-1.5, 1.5)
-            ax[0].set_ylim(phase_ylims) #-1.5, 1.5)
+            ax[0].set_xlim(phase_xlims)
+            ax[0].set_ylim(phase_ylims)
             ax[0].set_aspect("equal")
-            #ax.legend(legend_loc, frameon = frame_legend)
             p_cbar = fig.colorbar(p_cm, ax = ax[0], label = "Time ($\Delta t$), Prediction",
-                                  location = cbar_locs[0], pad = -.05) # -.1)
+                                  location = cbar_locs[0], pad = -.05)
             t_cbar = fig.colorbar(t_cm, ax = ax[0], label = "Time ($\Delta t$), Truth",
-                                  location = cbar_locs[1], pad = 0.) #shrink = .8)
+                                  location = cbar_locs[1], pad = 0.)
             
             if energy_func is not None:
                 plot_energies(
@@ -1232,7 +1254,7 @@ def plot_prediction_and_energies(
                     frame_legend = frame_legend,
                     legend_loc = legend_loc,
                     legend_ax = 0,
-                    n_legend_cols = 3, #n_legend_cols//2,
+                    n_legend_cols = 3,
                     font_size = font_size,
                     incl_tvalid = False,
                     axes = ax[-forecast.shape[1]:],
@@ -1266,16 +1288,18 @@ def plot_state_space(
         pred_color:             Union[str, List[str]] = "tab:gray",
         true_color:             Union[str, List[str]] = "tab:blue",
         alpha:                  float = 1.,
+        train_alpha:            float = 1.,
         fixed_points:           Union[list, np.ndarray] = None,
         phase_xlims:            tuple = None,
         phase_ylims:            tuple = None,
+        phase_zlims:            tuple = None,
         equal_aspect:           bool = False,
         plot_dims:              Union[int, List[int]] = [0, 1],
         figsize:                tuple = (6.5, 6),
         fig_legend:             bool = False,
         legend:                 bool = True,
         frame_legend:           bool = False,
-        legend_loc:             tuple = (.5, 1.1), # -.75),
+        legend_loc:             tuple = (.5, 1.1),
         n_legend_cols:          int = 4,
         font_size:              float = 15.,
         show_plot:              bool = True,
@@ -1284,7 +1308,16 @@ def plot_state_space(
         save_name:              str = "Pred_and_Energies.png",
         title:                  str = None,
         transparency:           bool = True,
-        num_ticks:              int = None
+        num_ticks:              int = None,
+        plot_3d:                bool = False,
+        hide_axis:              bool = False,
+        hide_grid:              bool = False,
+        fig:                    mpl.figure.Figure = None,
+        ax:                     mpl.axes._axes.Axes = None,
+        xlabel:                 str = "$x$",
+        ylabel:                 str = "$y$",
+        zlabel:                 str = "$z$",
+        train_linestyle:        Union[str, tuple] = "-"
         ):
     
     if train_trajs is None:
@@ -1320,80 +1353,148 @@ def plot_state_space(
         true_color = [true_color] * len(true_trajs)
     
     with mpl.rc_context({"font.size" : font_size}):
-        fig, ax = plt.subplots(figsize = figsize, constrained_layout = True)#, squeeze = False)
+        if plot_3d:
+            if fig is None and ax is None:
+                fig, ax = plt.subplots(
+                    figsize = figsize, constrained_layout = True,
+                    subplot_kw = {"projection" : '3d'}
+                    )
             
-        for i, traj in enumerate(train_trajs):
-            if i == 0:
-                label = 'Training Trajectory'
-            else:
-                label = None
-            ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], c = train_color[i],
-                    label = label, alpha = alpha)
-            ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], c = train_color[i],
-                       s = 2.)
-        
-        for i, traj in enumerate(true_trajs):
-            if i == 0:
-                label = 'True Trajectory'
-            else:
-                label = None
-            ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], c = true_color[i],
-                    label = label, alpha = alpha)
-            ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], c = true_color[i],
-                       s = 2.)
-        
-        for i, traj in enumerate(resync_trajs):
-            if i == 0:
-                label = 'Resync Trajectory'
-            else:
-                label = None
-            ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], c = resync_color[i],
-                    label = label, alpha = alpha, linewidth = 3.)
-            ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], c = resync_color[i],
-                       s = 5.) #2.)
-        
-        for i, traj in enumerate(pred_trajs):
-            if i == 0:
-                label = 'Predicted Trajectory'
-            else:
-                label = None
-            if len(resync_trajs) == len(pred_trajs):
-                traj = np.concatenate((resync_trajs[i][-1][None], traj))
-            ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], c = pred_color[i],
-                    label = label, alpha = alpha)
-            #ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], c = pred_color)
-        
-        if fixed_points is not None:
-            ax.scatter(x = fixed_points[:, 0], y = fixed_points[:, 1],
-                       c = "k", marker = "x", s = 50., #100.,
-                       linewidths = 2, #3,
-                       label = "Fixed Points",
-                       zorder = 3
-                       )
+            for i, traj in enumerate(train_trajs):
+                if i == 0:
+                    label = 'Training Trajectory'
+                else:
+                    label = None
+                ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], traj[:, plot_dims[2]],
+                        c = train_color[i], label = label, alpha = train_alpha, linestyle = train_linestyle)
+                ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], traj[0, plot_dims[2]],
+                           c = train_color[i], s = 2.)
+            
+            for i, traj in enumerate(true_trajs):
+                if i == 0:
+                    label = 'True Trajectory'
+                else:
+                    label = None
+                ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], traj[:, plot_dims[2]],
+                           c = train_color[i], label = label, alpha = alpha)
+                ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], traj[0, plot_dims[2]],
+                           c = train_color[i], s = 2.)
+            
+            for i, traj in enumerate(resync_trajs):
+                if i == 0:
+                    label = 'Resync Trajectory'
+                else:
+                    label = None
+                ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], traj[:, plot_dims[2]],
+                           c = resync_color[i], label = label, alpha = alpha, linewidth = 3.)
+                ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], traj[0, plot_dims[2]],
+                           c = resync_color[i],s = 5.) #2.)
+            
+            for i, traj in enumerate(pred_trajs):
+                if i == 0:
+                    label = 'Predicted Trajectory'
+                else:
+                    label = None
+                if len(resync_trajs) == len(pred_trajs):
+                    traj = np.concatenate((resync_trajs[i][-1][None], traj))
+                ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], traj[:, plot_dims[2]],
+                           c = pred_color[i], label = label, alpha = alpha)
+            
+            if fixed_points is not None:
+                ax.scatter(xs = fixed_points[:, 0], ys = fixed_points[:, 1], zs = fixed_points[:, 2],
+                           c = "k", marker = "x", s = 50., #100.,
+                           linewidths = 2, #3,
+                           label = "Fixed Points",
+                           zorder = 3
+                           )
+            
+        else:
+            if fig is None and ax is None:
+                fig, ax = plt.subplots(figsize = figsize, constrained_layout = True)
+                
+            for i, traj in enumerate(train_trajs):
+                if i == 0:
+                    label = 'Training Trajectory'
+                else:
+                    label = None
+                ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], c = train_color[i],
+                        label = label, alpha = train_alpha, linestyle = train_linestyle)
+                ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], c = train_color[i],
+                           s = 2.)
+            
+            for i, traj in enumerate(true_trajs):
+                if i == 0:
+                    label = 'True Trajectory'
+                else:
+                    label = None
+                ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], c = true_color[i],
+                        label = label, alpha = alpha)
+                ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], c = true_color[i],
+                           s = 2.)
+            
+            for i, traj in enumerate(resync_trajs):
+                if i == 0:
+                    label = 'Resync Trajectory'
+                else:
+                    label = None
+                ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], c = resync_color[i],
+                        label = label, alpha = alpha, linewidth = 3.)
+                ax.scatter(traj[0, plot_dims[0]], traj[0, plot_dims[1]], c = resync_color[i],
+                           s = 5.) #2.)
+            
+            for i, traj in enumerate(pred_trajs):
+                if i == 0:
+                    label = 'Predicted Trajectory'
+                else:
+                    label = None
+                if len(resync_trajs) == len(pred_trajs):
+                    traj = np.concatenate((resync_trajs[i][-1][None], traj))
+                ax.plot(traj[:, plot_dims[0]], traj[:, plot_dims[1]], c = pred_color[i],
+                        label = label, alpha = alpha)
+            
+            if fixed_points is not None:
+                ax.scatter(x = fixed_points[:, 0], y = fixed_points[:, 1],
+                           c = "k", marker = "x", s = 50.,
+                           linewidths = 2,
+                           label = "Fixed Points",
+                           zorder = 3
+                           )
         
         if fig_legend:
             fig.legend(frameon = frame_legend, loc = legend_loc, ncols = n_legend_cols)
         elif legend:
             ax.legend(frameon = frame_legend, loc = legend_loc, ncols = n_legend_cols)
             
-        ax.set_xlabel("$x$")
-        ax.set_ylabel("$y$")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
         ax.set_xlim(phase_xlims)
         ax.set_ylim(phase_ylims)
+        if plot_3d:
+            ax.set_zlabel(zlabel) #"$z$")
+            ax.set_zlim(phase_zlims)
         if equal_aspect:
             ax.set_aspect("equal")  
             
         if num_ticks is not None:
             ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_ticks))
             ax.set_yticks(np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_ticks))
-            #ax.set_xticks(np.linspace(min(initial_pts[:, 0]), max(initial_pts[:, 0]), num_ticks))
-            #ax.set_yticks(np.linspace(min(initial_pts[:, 1]), max(initial_pts[:, 1]), num_ticks))
+            if plot_3d:
+                ax.set_zticks(np.linspace(ax.get_zlim()[0], ax.get_zlim()[1], num_ticks))
             
         if title is not None:
             fig.suptitle(title)
             
         if transparency:
             fig.patch.set_alpha(0)
+            
+        if hide_axis:
+            ax.set_axis_off()
+        
+        if hide_grid:
+            ax.grid(False)
+            ax.xaxis.pane.fill = False
+            ax.yaxis.pane.fill = False
+            ax.zaxis.pane.fill = False
         
         if save_plot:
             if save_loc is None:
