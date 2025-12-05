@@ -822,7 +822,7 @@ class Library():
             if len(self.data) > 1:
                 u = functools.reduce(
                     lambda u, u_new: np.concatenate((u, u_new), axis = 0), self.data[1:])
-            self.standardizer = rc.Standardizer(u = u, scale_factor = "max") #"var") #"max")
+            self.standardizer = rc.Standardizer(u = u, scale_factor = "max")
         
         self.data = [self.standardizer.standardize(u = signal) for signal in self.data]
         self.standardize = True
