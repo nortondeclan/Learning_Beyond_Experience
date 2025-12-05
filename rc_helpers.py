@@ -280,9 +280,6 @@ def plot_predict_result(
         
     if max_horizon is None:
         max_horizon = prediction.reservoir_outputs.shape[0]
-        
-    #if xlabel is None:
-    #    xlabel = "Time (Time Steps, $\\Delta t$)"
     
     with mpl.rc_context({"font.size" : font_size}):
         if figsize is None:
@@ -306,8 +303,7 @@ def plot_predict_result(
                 ax.plot(
                     t0 + np.arange(- prediction.resync_inputs.shape[0] + 1, 1),
                     prediction.resync_inputs[:, i],
-                    color = truth_color, #"k",
-                    #label = "True Signal"
+                    color = truth_color,
                     linewidth = linewidth,
                     alpha = line_alpha
                     )
@@ -316,9 +312,8 @@ def plot_predict_result(
                 ax.plot(
                     t0 + np.arange(- prediction.resync_outputs.shape[0] + 1, 1),
                     prediction.resync_inputs[lookback_length:, i],
-                    color = truth_color, #"r",
-                    linestyle = "-", #"dotted",
-                    #label = "True Signal"
+                    color = truth_color,
+                    linestyle = "-",
                     linewidth = linewidth,
                     alpha = line_alpha
                     )
@@ -326,17 +321,17 @@ def plot_predict_result(
                 ax.plot(
                     t0 + np.arange(1, prediction.target_outputs.shape[0] + 1),
                     prediction.target_outputs[:, i],
-                    color = truth_color, #"k",
-                    label = "Truth", #"e Signal"
+                    color = truth_color,
+                    label = "Truth",
                     linewidth = linewidth,
                     alpha = line_alpha
                     )
             ax.plot(
                 t0 + np.arange(1, prediction.reservoir_outputs.shape[0] + 1),
                 prediction.reservoir_outputs[:, i],
-                color = prediction_color, #"r",
+                color = prediction_color,
                 label = "Prediction",
-                linestyle = "-", #dotted"
+                linestyle = "-",
                 linewidth = linewidth,
                 alpha = line_alpha
                 )
@@ -345,7 +340,7 @@ def plot_predict_result(
             if prediction.target_outputs is not None and incl_tvalid and \
                 np.all(np.var(prediction.target_outputs, axis = 0)):
                     ax.axvline(x = t0 + prediction.valid_length(), linestyle = "--",
-                               color = prediction_color, #"r",
+                               color = prediction_color,
                                linewidth = vert_linewidth,
                                label = "Valid Prediction Time")
             if ylabel is None:
@@ -367,8 +362,6 @@ def plot_predict_result(
                 ax.set_xticks(xticks)
             elif num_xticks is not None:
                 ax.set_xticks(np.linspace(ax.get_xlim()[0], ax.get_xlim()[1], num_xticks))
-                #ax.set_xticks(np.linspace(min(initial_pts[:, 0]), max(initial_pts[:, 0]), num_ticks))
-                #ax.set_yticks(np.linspace(min(initial_pts[:, 1]), max(initial_pts[:, 1]), num_ticks))
             if yticks is not None:
                 ax.set_yticks(yticks)
             elif num_yticks is not None:
@@ -379,8 +372,7 @@ def plot_predict_result(
                                   ncols = n_legend_cols, frameon = frame_legend)
         elif make_legend:
             axs[legend_ax].legend(loc = legend_loc, ncols = n_legend_cols, frameon = frame_legend)
-        axs[-1].set_xlabel(xlabel) #"Time (Time Steps, $\\Delta t$)") #($\\tau_{Lyap}$)")
-        #fig.suptitle("Valid Time: $T_{valid}=$" + f"{prediction.valid_length()}" + "$\\tau_{Lyap}$")
+        axs[-1].set_xlabel(xlabel)
         
         if fig is not None:
             fig.patch.set_alpha(fig_alpha)
